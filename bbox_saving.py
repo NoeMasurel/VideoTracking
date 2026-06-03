@@ -10,14 +10,14 @@ class ObjectTracking:
                  duration=None, confidence=None, tracker = None):
         """
         Parameters
-        ----------
         source      : path to the source video
         words       : list of classes to detect
-        model       : YOLO weights file
-        start       : analysis start in seconds (optional)
-        end         : analysis end in seconds (optional, exclusive with duration)
-        duration    : analysis duration in seconds (optional, exclusive with end)
-        confidence  : confidence threshold (optional)
+        model       : YOLO .pt file
+        start       : in seconds (optional)
+        end         : in seconds (optional, exclusive with duration)
+        duration    : in seconds (optional, exclusive with end)
+        confidence  : confidence threshold (optional) (inital confidence level to pass to the tracking model)
+        tracker     : tracking parameters (.yaml) (optional) 
         """
 
         self.model = YOLO(model)
@@ -131,7 +131,6 @@ class ObjectTracking:
                 (0, 255, 200), 2, cv2.LINE_AA
             )
 
-    # ------------------------------------------------------------------
     def run(self, output_json="detections.json"):
         current_frame = self.start_frame
 
@@ -215,6 +214,7 @@ if __name__ == "__main__":
         model="yolo26n.pt",
         source="videos/2025_08_11/20250811_0.mp4",
         words=["person", "bicycle"],
-        end=10,
+        confidence = .5,
+        end=10
     )
     tracker.run()
