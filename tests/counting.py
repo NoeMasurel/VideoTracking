@@ -213,9 +213,11 @@ class ObjectTracking:
 if __name__ == "__main__":
     tracker = ObjectTracking(
         model="yolo26n.pt",
-        source="videos/2025_08_11/20250811_0.mp4",
-        words=['person', 'car', 'bicycle'],
+        source="videos/2025_08_15/20250815.mp4",
+        words=['person', 'bicycle'],
         save_video=True,   # ← True  : vidéo annotée + fenêtre live
-                            # ← False : comptage uniquement, rien d'affiché
+                            # ← False : compt   age uniquement, rien d'affiché
+        end=1119,
+        start=507
     )
     tracker.run()

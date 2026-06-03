@@ -1,15 +1,32 @@
 import cv2
-import numpy as np
 from ultralytics import YOLO
 from ultralytics.utils.plotting import colors
 from collections import defaultdict
+import json
+
 
 class ObjectTracking:
-    def __init__(self, source, words, model="yolo26n.pt", start=None, end=None, duration=None):
+    def __init__(self, source, words, model="yolo26n.pt", start=None, end=None,
+                 duration=None, confidence=None, tracker = None):
+        """
+        Parameters
+        ----------
+        source      : path to the source video
+        words       : list of classes to detect
+        model       : YOLO weights file
+        start       : analysis start in seconds (optional)
+        end         : analysis end in seconds (optional, exclusive with duration)
+        duration    : analysis duration in seconds (optional, exclusive with end)
+        confidence  : confidence threshold (optional)
+        """
 
         self.model = YOLO(model)
         self.names = self.model.names
         self.indices = [{v: k for k, v in self.names.items()}[w] for w in words]
+        self.confidence = confidence
+        self.tracker = tracker
+        self.source = source
+        self.all_detections = {}
 
         self.cap = cv2.VideoCapture(source)
         if not self.cap.isOpened():
@@ -18,10 +35,11 @@ class ObjectTracking:
         self.w   = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.h   = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.fps = self.cap.get(cv2.CAP_PROP_FPS) or 30
-        total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        total_frames   = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
         total_duration = total_frames / self.fps
 
-        print(f"Video loaded: {self.w}x{self.h} @ {self.fps} FPS | Total duration: {total_duration:.2f}s")
+        print(f"Video loaded: {self.w}x{self.h} @ {self.fps} FPS | "
+              f"Total duration: {total_duration:.2f}s")
 
         if end is not None and duration is not None:
             raise ValueError("Provide either 'end' or 'duration', not both.")
@@ -45,45 +63,28 @@ class ObjectTracking:
         self.end_frame   = int(self.end_sec   * self.fps)
 
         print(f"Analyzing: {self.start_sec:.2f}s → {self.end_sec:.2f}s "
-              f"(frames {self.start_frame} – {self.end_frame})")
+              f"(frames {self.start_frame} - {self.end_frame})")
 
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.start_frame)
 
-        output_path = source.replace(".mp4", "_tracked.mp4")
-        self.writer = cv2.VideoWriter(
-            output_path,
-            cv2.VideoWriter_fourcc(*"mp4v"), # type: ignore
-            self.fps,
-            (self.w, self.h)
-        )
-        if not self.writer.isOpened():
-            raise ValueError("Error: VideoWriter failed to open")
-
         self.track_history = defaultdict(lambda: [])
+        self.class_counts  = defaultdict(int)
+        self.seen_ids      = set()
 
-        # --- Comptage par classe ---
-        # Clé : nom de classe → nombre d'IDs uniques vus
-        self.class_counts = defaultdict(int)
-        # Évite de compter le même (track_id, class) deux fois
-        self.seen_ids = set()
-
-        self.rect_width        = 2
-        self.font              = 1.0
-        self.text_width        = 2
-        self.padding           = 12
-        self.margin            = 10
+        self.rect_width         = 2
+        self.font               = 1.0
+        self.text_width         = 2
+        self.padding            = 12
+        self.margin             = 10
         self.polyline_thickness = 2
 
-        self.window_name = "YOLO Tracking"
-        cv2.namedWindow(self.window_name, cv2.WINDOW_NORMAL)
-
-    def draw_bbox(self, im0, box, track_id, cls):
+    def draw_bbox(self, im0, box, track_id, cls, conf):
         x1, y1, x2, y2 = map(int, box)
         color = colors(int(cls), True)
 
         cv2.rectangle(im0, (x1, y1), (x2, y2), color, self.rect_width)
 
-        label = f"{self.names[int(cls)]}:{int(track_id)}"
+        label = f"{self.names[int(cls)]}:{int(track_id)} at {conf:.2f}%"
         (tw, th), _ = cv2.getTextSize(
             label, cv2.FONT_HERSHEY_SIMPLEX, self.font, self.text_width
         )
@@ -104,38 +105,34 @@ class ObjectTracking:
         )
 
     def update_counts(self, track_id, cls):
-        """Enregistre un objet s'il n'a jamais été vu (par track_id + classe)."""
         key = (int(track_id), int(cls))
         if key not in self.seen_ids:
             self.seen_ids.add(key)
-            class_name = self.names[int(cls)]
-            self.class_counts[class_name] += 1
+            self.class_counts[self.names[int(cls)]] += 1
 
     def draw_class_counts(self, frame):
-        """Affiche le tableau des comptages par classe en haut à gauche."""
         if not self.class_counts:
             return
 
-        line_h   = 36
-        padding  = 10
-        width    = 220
-        height   = padding + len(self.class_counts) * line_h + padding
+        line_h  = 36
+        padding = 10
+        width   = 220
+        height  = padding + len(self.class_counts) * line_h + padding
 
-        # Fond semi-transparent
         overlay = frame.copy()
         cv2.rectangle(overlay, (10, 10), (10 + width, 10 + height), (0, 0, 0), -1)
         cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
 
         for i, (class_name, count) in enumerate(sorted(self.class_counts.items())):
             y = 10 + padding + i * line_h + line_h // 2 + 8
-            label = f"{class_name}: {count}"
             cv2.putText(
-                frame, label, (20, y),
+                frame, f"{class_name}: {count}", (20, y),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.85,
                 (0, 255, 200), 2, cv2.LINE_AA
             )
 
-    def run(self):
+    # ------------------------------------------------------------------
+    def run(self, output_json="detections.json"):
         current_frame = self.start_frame
 
         while self.cap.isOpened() and current_frame < self.end_frame:
@@ -146,47 +143,78 @@ class ObjectTracking:
 
             current_frame += 1
 
-            results = self.model.track(frame,persist=True, verbose=False, classes=self.indices, tracker='botsort.yaml')
+            kwargs = {
+                "persist": True,
+                "verbose": False,
+                "classes": self.indices,
+            }
+            if self.confidence is not None:
+                kwargs["conf"] = self.confidence
+            if self.tracker is not None:
+                kwargs["tracker"] = self.tracker
+
+            results = self.model.track(frame, **kwargs)
 
             if results and len(results) > 0:
                 result = results[0]
+                annotated_frame = results[0].plot()
+                cv2.imshow("YOLO Tracking", annotated_frame)
 
                 if result.boxes is not None and result.boxes.id is not None:
-                    boxes = result.boxes.xyxy.cpu() # type: ignore
+                    boxes = result.boxes.xyxy.cpu().tolist()  # type: ignore
                     ids   = result.boxes.id.cpu().tolist() # type: ignore
                     clss  = result.boxes.cls.tolist()
+                    confs = result.boxes.conf.cpu().tolist()# type: ignore
 
-                    for box, track_id, cls in zip(boxes, ids, clss):
-                        self.draw_bbox(frame, box, track_id, cls)
+                    frame_data = []
+                    for box, track_id, cls, conf in zip(boxes, ids, clss, confs):
                         self.update_counts(track_id, cls)
+                        frame_data.append({
+                            "id":   int(track_id) if track_id is not None else None,
+                            "cls":  int(cls),
+                            "conf": conf,
+                            "bbox": [float(x) for x in box]
+                        })
 
-                        x1, y1, x2, y2 = box
-                        cx = float((x1 + x2) / 2)
-                        cy = float((y1 + y2) / 2)
-                        cv2.circle(frame, (int(cx), int(cy)), 5, colors(cls, True), -1)
+                    self.all_detections[current_frame] = frame_data
 
-            self.draw_class_counts(frame)
-
-            self.writer.write(frame)
-            cv2.imshow(self.window_name, frame)
-
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
 
-        # Affichage final dans le terminal
-        print("\n=== Comptage final par classe ===")
+        self.cap.release()
+        cv2.destroyAllWindows()
+
+        # --- Final count ---
+        print("\n=== Final class counts ===")
         for class_name, count in sorted(self.class_counts.items()):
             print(f"  {class_name}: {count}")
 
-        self.cap.release()
-        self.writer.release()
-        cv2.destroyAllWindows()
+        # --- Save JSON with metadata so playback.py is self-contained ---
+        output = {
+            "meta": {
+                "source":      self.source,
+                "fps":         self.fps,
+                "width":       self.w,
+                "height":      self.h,
+                "start_frame": self.start_frame,
+                "end_frame":   self.end_frame,
+                "class_names": self.names,   # {int_str: class_name}
+            },
+            "detections": self.all_detections,
+        }
+
+        with open(output_json, "w") as f:
+            json.dump(output, f)
+
+        print(f"\nDetections saved to {output_json}")
 
 
+# ----------------------------------------------------------------------
 if __name__ == "__main__":
     tracker = ObjectTracking(
         model="yolo26n.pt",
         source="videos/2025_08_11/20250811_0.mp4",
-        words=['car', 'person', 'bicycle', 'motorcycle', 'bus'],
+        words=["person", "bicycle"],
+        end=10,
     )
-    tracker.run()   
+    tracker.run()
