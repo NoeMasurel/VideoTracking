@@ -1,8 +1,6 @@
 import ffmpeg
-INPUT = 20250811
-
-input_file = f"videos/{INPUT}.mp4"
-
+import argparse
+from pathlib import Path
 
 
 def mintosec(time):
@@ -16,24 +14,81 @@ def splitts(ts):
 
     duration = end - start
     if duration <= 0:
-        raise ValueError(f"Bad timestamp: {ts}")
+        raise ValueError(f"Bad timestamp (end <= start): {ts}")
 
     return start, duration
 
-timestamps = ["1:13-2:35","2:35-3:52","4:17-5:45","6:50-9:05",
-              "9:05-10:08","10:08-11:12","11:12-11:50",
-              "11:50-13:04","13:04-14:53","15:22-18:00"]
-
 
 def extract_clips(input_file, timestamps):
-    for i in range(len(timestamps)):
-        output = f"videos/{INPUT}_result_{i}.mp4"
-        start, duration = splitts(timestamps[i])
-        (
-            ffmpeg
-            .input(input_file, ss=start, t=duration)
-            .output(output, vcodec="libx264", acodec="aac", crf=18)
-            .run(overwrite_output=True)
-        )
+    p = Path(input_file)
 
-extract_clips(input_file, timestamps)
+    for i, ts in enumerate(timestamps):
+        try:
+            output = str(p.with_name(f"{p.stem}_{i}.mp4"))
+            start, duration = splitts(ts)
+
+            (
+                ffmpeg
+                .input(input_file, ss=start, t=duration)
+                .output(
+                    output,
+                    vcodec="libx264",
+                    acodec="aac",
+                    crf=18
+                )
+                .run(overwrite_output=True)
+            )
+
+            print(f"Created: {output}")
+
+        except Exception as e:
+            print(f"Skipping timestamp '{ts}' (index {i}) : {e}")
+
+
+def validate_file(path_str, label):
+    path = Path(path_str)
+
+    if not path.exists():
+        raise FileNotFoundError(f"{label} not found: {path}")
+
+    if not path.is_file():
+        raise ValueError(f"{label} is not a file: {path}")
+
+    return path
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Cut video into clips using timestamps")
+    ap.add_argument("-v", "--video", default=None, help="Source video path")
+    ap.add_argument("-ts", "--timestamps", default=None, help="Timestamps file")
+
+    args = ap.parse_args()
+
+    input_file = args.video or input("Input file (path/to/vid.mp4): ")
+    ts_file = args.timestamps or input("Timestamps file (timestamps.txt): ")
+
+    try:
+        input_file = validate_file(input_file, "Video file")
+        ts_file = validate_file(ts_file, "Timestamps file")
+    except Exception as e:
+        print(f"Error: {e}")
+        return
+
+    try:
+        with open(ts_file, "r") as f:
+            timestamps = [t for t in f.read().split() if "-" in t]
+    except Exception as e:
+        print(f"Failed to read timestamps: {e}")
+        return
+
+    if not timestamps:
+        print("No valid timestamps found in file")
+        return
+
+    print(f"Processing {len(timestamps)} clips...")
+
+    extract_clips(input_file, timestamps)
+
+
+if __name__ == "__main__":
+    main()
