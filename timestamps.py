@@ -7,11 +7,6 @@ def format_seconds(total_seconds):
     return f"{m:02d}:{s:02d}"
 
 def format_timestamps(timestamps):
-    """
-    Pair timestamps as start-end segments and return a space-separated string.
-    e.g. [10, 25, 40, 60] -> "00:10-00:25 00:40-01:00"
-    If an odd number of timestamps, the last segment is left open (start only).
-    """
     segments = []
     for i in range(0, len(timestamps) - 1, 2):
         start = format_seconds(timestamps[i])
@@ -21,53 +16,8 @@ def format_timestamps(timestamps):
         segments.append(f"{format_seconds(timestamps[-1])}-??:??")
     return " ".join(segments)
 
-def draw_overlay(frame, current_frame, fps, timestamps, is_recording):
-    """Draw controls and status onto a copy of the frame."""
+def draw_overlay(frame, timestamps,):
     out = frame.copy()
-    h, w = out.shape[:2]
- 
-    bar_h = 115
- 
-    # ── Semi-transparent dark bar at the bottom ──────────────────────
-    bar_copy = out.copy()
-    cv2.rectangle(bar_copy, (0, h - bar_h), (w, h), (20, 20, 20), -1)
-    cv2.addWeighted(bar_copy[h - bar_h:h], 0.7,
-                    out[h - bar_h:h],      0.3,
-                    0, out[h - bar_h:h])
- 
-    # ── Controls legend ──────────────────────────────────────────────
-    controls = [
-        "S / SPACE : debut segment",
-        "E         : fin segment",
-        "B         : reculer 5s",
-        "Q / ESC   : quitter",
-    ]
-    x0 = 12
-    y0 = h - bar_h + 20
-    for i, line in enumerate(controls):
-        cv2.putText(out, line, (x0 + 1, y0 + i * 24 + 1),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, (0, 0, 0), 2, cv2.LINE_AA)
-        cv2.putText(out, line, (x0, y0 + i * 24),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.52, (220, 220, 220), 1, cv2.LINE_AA)
- 
-    # ── Timecode (current position) ──────────────────────────────────
-    current_sec = int(current_frame / fps)
-    tc = format_seconds(current_sec)
-    tc_x = w - 95
-    tc_y = h - bar_h + 26
-    cv2.putText(out, tc, (tc_x + 1, tc_y + 1),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 0), 3, cv2.LINE_AA)
-    cv2.putText(out, tc, (tc_x, tc_y),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.75, (255, 255, 255), 2, cv2.LINE_AA)
- 
-    # ── Recording indicator ──────────────────────────────────────────
-    rec_y = h - bar_h + 55
-    if is_recording:
-        cv2.circle(out, (w - 20, rec_y - 6), 9, (0, 0, 200), -1)
-        cv2.circle(out, (w - 20, rec_y - 6), 9, (0, 0, 255), 2)
-        cv2.putText(out, "REC", (w - 65, rec_y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2, cv2.LINE_AA)
- 
     # ── Segments recorded so far (top of frame) ──────────────────────
     if timestamps:
         seg_str = format_timestamps(timestamps)
@@ -106,7 +56,7 @@ def main():
             break
         current_frame += 1
 
-        display = draw_overlay(frame, current_frame, fps, timestamps, is_recording)
+        display = draw_overlay(frame, timestamps)
         cv2.imshow("Playback", display)
 
         key = cv2.waitKey(1) & 0xFF
