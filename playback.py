@@ -168,11 +168,11 @@ def main():
                 seen_ids.add(uid)
                 class_counts[class_name] = class_counts.get(class_name, 0) + 1
 
-            draw_bbox(frame, bbox, int(track_id), class_name, conf)
+            draw_bbox(frame, bbox, int(track_id), class_name, conf) # type: ignore
 
-        draw_hud(frame, current_frame - start_frame, total_analyzed, fps, paused, class_counts)
+        draw_hud(frame, current_frame - start_frame, total_analyzed, fps, paused, class_counts) # type: ignore
 
-        cv2.imshow("Playback - detections.json", frame)
+        cv2.imshow("Playback - detections.json", frame) # type: ignore
 
         key = cv2.waitKey(1 if paused else delay_ms) & 0xFF
         if key in (ord("q"), 27):          # q or ESC
