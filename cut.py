@@ -2,6 +2,14 @@ import ffmpeg
 import argparse
 from pathlib import Path
 
+"""
+USAGE : 
+
+    --video : specify the input path
+    --timestamps : specifiy the timestamps, format xx:xx seperated by spaces.
+
+"""
+
 
 def mintosec(time):
     m, s = map(int, time.split(':'))
