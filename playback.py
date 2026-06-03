@@ -82,7 +82,8 @@ def draw_hud(frame, frame_idx, total_frames, fps, paused, class_counts):
 def main():
     ap = argparse.ArgumentParser(description="Replay video with saved bounding boxes.")
     ap.add_argument("-j", "--json",  default="detections.json", help="Path to detections JSON")
-    ap.add_argument("-v","--video", default=None,              help="Override source video path")
+    ap.add_argument("-v","--video", default=None, help="Override source video path")
+    ap.add_argument("-s", "--speed", default = 1, help="Playback speed")
     args = ap.parse_args()
 
     # ── Load JSON ────────────────────────────────────────────────────────────
