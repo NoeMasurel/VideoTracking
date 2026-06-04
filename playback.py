@@ -2,14 +2,12 @@
 playback.py — Replay a video with bounding boxes from detections.json
 
 Usage
------
-    python playback.py                              # uses detections.json + source path stored inside
-    python playback.py --json detections.json       # explicit JSON path
-    python playback.py --json detections.json --video path/to/video.mp4   # override video path
-    python playback.py --json detections.json --speed 2.0                 # 2× playback speed
+    python playback.py # detections.json + source path stored inside
+    python playback.py --json detections.json # explicit JSON path
+    python playback.py --json detections.json --video path/to/video.mp4 # override video path
+    python playback.py --json detections.json --speed 2.0 # 2x playback speed
 
 Controls
---------
     q / ESC   → quit
     SPACE     → pause / resume
     d         → step forward one frame (while paused)
@@ -21,7 +19,6 @@ import argparse
 from pathlib import Path
 
 
-# ── Colour palette (BGR) – one per unique track ID ──────────────────────────
 _PALETTE = [
     (0, 255, 200), (255, 100,   0), (  0, 100, 255), (200, 255,   0),
     (255,   0, 200), (  0, 200, 255), (255, 200,   0), (100,   0, 255),
@@ -31,8 +28,6 @@ _PALETTE = [
 def _color(track_id: int):
     return _PALETTE[track_id % len(_PALETTE)]
 
-
-# ── Drawing helpers ──────────────────────────────────────────────────────────
 def draw_bbox(frame, box, track_id, class_name, conf):
     x1, y1, x2, y2 = map(int, box)
     color = _color(track_id)
@@ -77,8 +72,6 @@ def draw_hud(frame, frame_idx, total_frames, fps, paused, class_counts):
         cv2.putText(frame, line, (16, y),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 200), 1, cv2.LINE_AA)
 
-
-# ── Main ─────────────────────────────────────────────────────────────────────
 def main():
     ap = argparse.ArgumentParser(description="Replay video with saved bounding boxes.")
     ap.add_argument("-j", "--json",  default="detections.json", help="Path to detections JSON")
@@ -86,7 +79,7 @@ def main():
     ap.add_argument("-s", "--speed", default = 1, help="Playback speed")
     args = ap.parse_args()
 
-    # ── Load JSON ────────────────────────────────────────────────────────────
+    # Load JSON
     json_path = Path(args.json)
     if not json_path.exists():
         raise FileNotFoundError(f"JSON not found: {json_path}")
@@ -134,7 +127,6 @@ def main():
 
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
-    # Pre-compute cumulative class counts (unique IDs per class)
     seen_ids     = set()
     class_counts = {}
 
@@ -163,7 +155,7 @@ def main():
             bbox       = det.get("bbox", [0, 0, 0, 0])
             class_name = class_names.get(cls, str(cls))
 
-            # Update running counts
+            # Update counts
             uid = (int(track_id), int(cls))
             if uid not in seen_ids:
                 seen_ids.add(uid)
