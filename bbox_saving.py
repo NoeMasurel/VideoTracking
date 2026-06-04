@@ -67,7 +67,7 @@ class ObjectTracking:
 
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.start_frame)
 
-        self.track_history = defaultdict(lambda: [])
+        self.track_history = defaultdict(list)
         self.class_counts  = defaultdict(int)
         self.seen_ids      = set()
 
@@ -183,12 +183,12 @@ class ObjectTracking:
         self.cap.release()
         cv2.destroyAllWindows()
 
-        # --- Final count ---
-        print("\n=== Final class counts ===")
+        # Final count 
+        print("\nFinal class counts ")
         for class_name, count in sorted(self.class_counts.items()):
             print(f"  {class_name}: {count}")
 
-        # --- Save JSON with metadata so playback.py is self-contained ---
+       # Save JSON with metadatas 
         output = {
             "meta": {
                 "source":      self.source,
@@ -208,13 +208,10 @@ class ObjectTracking:
         print(f"\nDetections saved to {output_json}")
 
 
-# ----------------------------------------------------------------------
 if __name__ == "__main__":
     tracker = ObjectTracking(
         model="yolo26n.pt",
         source="videos/2025_08_11/20250811_0.mp4",
         words=["person", "bicycle"],
-        confidence = .5,
-        end=10
     )
     tracker.run()
