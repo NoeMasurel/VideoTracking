@@ -1,6 +1,7 @@
 import ffmpeg
 import argparse
 from pathlib import Path
+import timestamps as ts
 
 """
 USAGE : 
@@ -26,13 +27,12 @@ def splitts(ts):
 
     return start, duration
 
-
 def extract_clips(input_file, timestamps):
     p = Path(input_file)
 
     for i, ts in enumerate(timestamps):
         try:
-            output = str(p.with_name(f"{p.stem}_{i}.mp4"))
+            output = str(p.with_name(f"{p.stem}_results_{i}.mp4"))
             start, duration = splitts(ts)
 
             (
@@ -52,7 +52,6 @@ def extract_clips(input_file, timestamps):
         except Exception as e:
             print(f"Skipping timestamp '{ts}' (index {i}) : {e}")
 
-
 def validate_file(path_str, label):
     path = Path(path_str)
 
@@ -64,39 +63,49 @@ def validate_file(path_str, label):
 
     return path
 
-
 def main():
     ap = argparse.ArgumentParser(description="Cut video into clips using timestamps")
-    ap.add_argument("-v", "--video", default=None, help="Source video path")
-    ap.add_argument("-ts", "--timestamps", default=None, help="Timestamps file")
+
+    ap.add_argument("-v", "--video", required=True, help="Source video path")
+
+    group = ap.add_mutually_exclusive_group(required=True)
+    group.add_argument("-m", "--manual", action="store_true", help="Select timestamps manually")
+    group.add_argument("-ts", "--timestamps", help="Timestamps file")
 
     args = ap.parse_args()
 
     input_file = args.video or input("Input file (path/to/vid.mp4): ")
-    ts_file = args.timestamps or input("Timestamps file (timestamps.txt): ")
 
     try:
         input_file = validate_file(input_file, "Video file")
-        ts_file = validate_file(ts_file, "Timestamps file")
     except Exception as e:
         print(f"Error: {e}")
         return
-
-    try:
-        with open(ts_file, "r") as f:
-            timestamps = [t for t in f.read().split() if "-" in t]
-    except Exception as e:
-        print(f"Failed to read timestamps: {e}")
-        return
-
-    if not timestamps:
-        print("No valid timestamps found in file")
-        return
+    
+    if args.manual:
+        print("Manual select")
+        timestamps = ts.get_timestamps(input_file).split() # type: ignore
+    else : 
+        print("Using the timestamps file")
+        ts_file = args.timestamps or input("Timestamps file (timestamps.txt): ")
+        try : 
+            ts_file = validate_file(ts_file, "Timestamps file")
+        except Exception as e:
+            print(f"Error: {e}")
+            return
+        try:
+            with open(ts_file, "r") as f:
+                timestamps = [t for t in f.read().split() if "-" in t]
+        except Exception as e:
+            print(f"Failed to read timestamps: {e}")
+            return
+        if not timestamps:
+            print("No valid timestamps found in file")
+            return
 
     print(f"Processing {len(timestamps)} clips...")
 
     extract_clips(input_file, timestamps)
-
 
 if __name__ == "__main__":
     main()

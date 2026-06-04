@@ -1,4 +1,5 @@
 import cv2
+import argparse
 
 def format_seconds(total_seconds):
     """Convert seconds to mm:ss string."""
@@ -12,13 +13,10 @@ def format_timestamps(timestamps):
         start = format_seconds(timestamps[i])
         end   = format_seconds(timestamps[i + 1])
         segments.append(f"{start}-{end}")
-    if len(timestamps) % 2 == 1:
-        segments.append(f"{format_seconds(timestamps[-1])}-??:??")
     return " ".join(segments)
 
 def draw_overlay(frame, timestamps,):
     out = frame.copy()
-    # ── Segments recorded so far (top of frame) ──────────────────────
     if timestamps:
         seg_str = format_timestamps(timestamps)
         (tw, th), _ = cv2.getTextSize(seg_str, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
@@ -28,9 +26,7 @@ def draw_overlay(frame, timestamps,):
  
     return out
 
-
-def main():
-    source_path = "videos/2025_08_11/20250811.mp4"
+def get_timestamps(source_path):
     output_file = "timestamps.txt"
     start_frame = 0
     timestamps = []
@@ -88,11 +84,19 @@ def main():
         print("\nTimestamps :", result)
         with open(output_file, "w") as f:
             f.write(result)
+        return result
 
     else:
         print("\nAucun timestamp enregistré.")
+        return []
 
-    print("Playback finished.")
+def main():
+    ap = argparse.ArgumentParser(description="Outputs a list of timestamps")
+    ap.add_argument("-v", "--video", default=None, help="Source video path")
+
+    args = ap.parse_args()
+    input_file = args.video or input("Input file (path/to/vid.mp4): ")
+    get_timestamps(input_file)
 
 
 if __name__ == "__main__":
