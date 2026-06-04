@@ -2,3 +2,4 @@
 yolo26n.pt
 detections.json
 botsort.yaml
+__pycache__
