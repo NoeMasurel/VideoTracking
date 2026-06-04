@@ -1,5 +1,5 @@
 /videos
 yolo26n.pt
-detections.json
+*.json
 botsort.yaml
 __pycache__
