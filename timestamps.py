@@ -9,9 +9,9 @@ def format_seconds(total_seconds):
 
 def format_timestamps(timestamps):
     segments = []
-    for i in range(0, len(timestamps) - 1, 2):
+    for i in range(0, len(timestamps), 2):
         start = format_seconds(timestamps[i])
-        end   = format_seconds(timestamps[i + 1])
+        end   = format_seconds(timestamps[i + 1]) if i + 1 < len(timestamps) else "??:??"
         segments.append(f"{start}-{end}")
     return " ".join(segments)
 
@@ -56,22 +56,40 @@ def get_timestamps(source_path):
         cv2.imshow("Playback", display)
 
         key = cv2.waitKey(1) & 0xFF
+        
+        match key :
+            case 113 | 27:  # q or ESC
+                break
+            case 98:  # b : reculer 5 s # type: ignore
+                new_pos = max(start_frame, current_frame - int(5 * fps))
+                cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
+                current_frame = new_pos
 
-        if key in (ord("q"), 27):                          # q ou ESC → quitter
-            break
+            case 110:  # n : avancer de 5 s # type: ignore
+                new_pos = min(end_frame, current_frame + int(5 * fps))
+                cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
+                current_frame = new_pos    
 
-        elif key == ord("b"):                              # reculer 5 s
-            new_pos = max(start_frame, current_frame - int(5 * fps))
-            cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
-            current_frame = new_pos
+            case 115 | 32:  # s or space :Commencer le comptage # type: ignore
+                if is_recording:
+                    timestamps.append(int(current_frame / fps))
+                    timestamps.append(int(current_frame / fps))  
+                else :
+                    is_recording = True
+                    timestamps.append(int(current_frame / fps))     
 
-        elif key in (ord("s"), ord(" ")) and not is_recording:   # début segment
-            is_recording = True
-            timestamps.append(int(current_frame / fps))
+            case 101:  # e : Fin du comptage # type: ignore
+                if is_recording:
+                    is_recording = False
+                    timestamps.append(int(current_frame / fps))
+                else : 
+                    if timestamps :
+                        timestamps.append(timestamps[-1])
+                        timestamps.append(int(current_frame / fps))
+                    pass
+            case _:
+                pass
 
-        elif key == ord("e") and is_recording:             # fin segment
-            is_recording = False
-            timestamps.append(int(current_frame / fps))
 
     cap.release()
     cv2.destroyAllWindows()
