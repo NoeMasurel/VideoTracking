@@ -3,3 +3,4 @@ yolo26n.pt
 *.json
 botsort.yaml
 __pycache__
+*.txt
