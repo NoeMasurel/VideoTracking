@@ -12,12 +12,10 @@ Controls
     SPACE     → pause / resume
     d         → step forward one frame (while paused)
 """
-
 import cv2
 import json
 import argparse
 from pathlib import Path
-
 
 _PALETTE = [
     (0, 255, 200), (255, 100,   0), (  0, 100, 255), (200, 255,   0),
@@ -53,7 +51,7 @@ def draw_bbox(frame, box, track_id, class_name, conf):
     )
 
 
-def draw_hud(frame, frame_idx, total_frames, fps, paused, class_counts):
+def draw_hud(frame, frame_idx, total_frames, paused, class_counts):
     """Top-left semi-transparent overlay with counts + playback info."""
     lines = [f"Frame {frame_idx}/{total_frames}  {'[PAUSED]' if paused else ''}"]
     lines += [f"  {name}: {cnt}" for name, cnt in sorted(class_counts.items())]
@@ -112,7 +110,7 @@ def main():
     if source_path is None:
         raise ValueError("No video path. Use --video path/to/video.mp4")
 
-    # ── Open video ───────────────────────────────────────────────────────────
+    # Open video
     cap = cv2.VideoCapture(source_path)
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {source_path}")
@@ -131,10 +129,10 @@ def main():
     class_counts = {}
 
     print(f"Playing back {source_path}")
-    print(f"Frames {start_frame} → {end_frame}  |  {fps:.1f} FPS  |  speed ×{args.speed}")
+    print(f"Frames {start_frame} to {end_frame}  |  {fps:.1f} FPS  |  speed × {args.speed}")
     print("Controls: SPACE=pause  d=step  q/ESC=quit")
 
-    paused       = False
+    paused = False
     current_frame = start_frame
 
     while cap.isOpened() and current_frame < end_frame:
@@ -144,7 +142,7 @@ def main():
                 break
             current_frame += 1
 
-        # Draw detections for this frame (key is stored as int or str)
+        # Draw detections for this frame (key : int or str)
         frame_key = str(current_frame)
         frame_dets = detections.get(frame_key, detections.get(current_frame, []))
 
