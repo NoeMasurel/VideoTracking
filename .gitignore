@@ -5,3 +5,4 @@ botsort.yaml
 __pycache__
 *.txt
 .vscode
+/data

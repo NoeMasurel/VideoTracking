@@ -131,7 +131,7 @@ def get_timestamps(source_path, output):
 def main():
     ap = argparse.ArgumentParser(description="Outputs a list of timestamps")
     ap.add_argument("-v", "--video", default=None, help="Source video path")
-    ap.add_argument("-o", "--output", default="timestamps.json", help ="Output file path")
+    ap.add_argument("-o", "--output", default="data/timestamps.json", help ="Output file path")
 
     args = ap.parse_args()
     input_file = args.video or input("Input file (path/to/vid.mp4): ")

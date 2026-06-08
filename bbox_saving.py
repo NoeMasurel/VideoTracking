@@ -131,7 +131,7 @@ class ObjectTracking:
                 (0, 255, 200), 2, cv2.LINE_AA
             )
 
-    def run(self, output_json="detections.json"):
+    def run(self, output_json="data/detections.json"):
         current_frame = self.start_frame
 
         while self.cap.isOpened() and current_frame < self.end_frame:

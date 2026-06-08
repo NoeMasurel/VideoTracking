@@ -15,7 +15,7 @@ def format_timestamps(timestamps):
         segments.append(f"{start}-{end}")
     return " ".join(segments)
 
-def draw_overlay(frame, timestamps,):
+def draw_overlay(frame, timestamps):
     out = frame.copy()
     if timestamps:
         seg_str = format_timestamps(timestamps)
@@ -27,7 +27,7 @@ def draw_overlay(frame, timestamps,):
     return out
 
 def get_timestamps(source_path):
-    output_file = "timestamps.txt"
+    output_file = "data/timestamps.txt"
     start_frame = 0
     timestamps = []
 
