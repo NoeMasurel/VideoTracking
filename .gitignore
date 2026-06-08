@@ -1,6 +1,7 @@
 /videos
-yolo26n.pt
+*.pt
 *.json
 botsort.yaml
 __pycache__
 *.txt
+.vscode
