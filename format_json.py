@@ -18,19 +18,40 @@ def format_timestamps(timestamps):
         segments.append(f"{start}-{end}")
     return " ".join(segments)
 
-def build_clips(annotations, timestamps):
-    """Return a list of {street, start, end} dicts from a flat list of seconds."""
+def build_clips(timestamps):
+    """Return a list of {file, start, end} dicts from a flat list of seconds."""
     clips = []
     for i in range(0, len(timestamps) - 1, 2):
         clip_index = i // 2
-
-        clip = {
-            "street" : annotations[clip_index],
+        clips.append({
             "start": format_seconds(timestamps[i]),
             "end": format_seconds(timestamps[i + 1]),
-        }
-        clips.append(clip)
+        })
     return clips
+
+def update_json(json_path, annotations, timestamps, source_path):
+    filename = os.path.basename(source_path)
+    clips = build_clips(timestamps)
+
+    # Load existing data if file exists
+    if os.path.exists(json_path):
+        with open(json_path, "r") as f:
+            pl = json.load(f)
+    else:
+        pl = []
+
+    # Build a lookup by street name
+    street_map = {entry["street"]: entry for entry in pl}
+
+    for i, annotation in enumerate(annotations):
+        if annotation not in street_map:
+            street_map[annotation] = {"street": annotation, "clips": {}}
+        street_map[annotation]["clips"][filename] = [clips[i]]
+
+    # Rebuild list and save
+    pl = list(street_map.values())
+    with open(json_path, "w") as f:
+        json.dump(pl, f, indent=1)
 
 def draw_overlay(frame, timestamps, annotations, current_annotation, waiting_for_annotation, is_paused):
     out = frame.copy()
@@ -77,7 +98,7 @@ def draw_overlay(frame, timestamps, annotations, current_annotation, waiting_for
     return out
 
 def get_timestamps(source_path, output):
-    timestamps_json = output
+    json_path = output
     start_frame = 0
     timestamps  = []
     annotations = []          # one entry per completed clip
@@ -239,14 +260,9 @@ def get_timestamps(source_path, output):
         result = format_timestamps(timestamps)
         print("\nTimestamps :", result)
 
-        pl = {
-            "file": os.path.basename(source_path),
-            "clips": build_clips(annotations, timestamps)
-        }
-        with open(timestamps_json, "w") as f:
-            json.dump(pl, f, indent=2)
+        update_json(json_path, annotations, timestamps, source_path)
 
-        print(f"Saved at {timestamps_json}")
+        print(f"Saved at {json_path}")
         return result
 
     else:
