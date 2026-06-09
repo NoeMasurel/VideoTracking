@@ -15,9 +15,11 @@ N : forward 5 seconds
 Q / ESC : quit (saves any completed segments)
 """
 
+import time
 import cv2
 import argparse
-import json
+import csv
+import pandas as pd
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -87,51 +89,46 @@ def build_clips(timestamps: list[int]) -> list[Clip]:
         ))
     return clips
 
-def update_json(
-    json_path: Path,
+import pandas as pd
+from pathlib import Path
+
+def update_csv(
+    csv_path: Path,
     annotations: list[str],
     timestamps: list[int],
     source_path: Path,
 ) -> None:
-    """Append or update clip entries in the JSON data file.
 
-    Repeated calls for the same street + filename *append* new clips rather
-    than overwriting previous ones.
-    """
     filename = source_path.name
     clips = build_clips(timestamps)
 
-    # Load existing data
-    if json_path.exists():
-        with json_path.open("r") as f:
-            try:
-                entries: list[dict] = json.load(f)
-            except json.JSONDecodeError:
-                print(f"Warning: {json_path} is not valid JSON — overwriting.")
-                entries = []
+    if len(annotations) != len(clips):
+        raise ValueError("annotations and clips must match")
+
+    rows = [] 
+    for annotation, clip in zip(annotations, clips): 
+        rows.append({ 
+            "video": filename, 
+            "segment": annotation, 
+            "start": clip.start, 
+            "end": clip.end, }) 
+        
+    new_df = pd.DataFrame(rows)
+
+    if csv_path.exists():
+        try:
+            df = pd.read_csv(csv_path)
+        except Exception:
+            df = pd.DataFrame(columns=new_df.columns)
     else:
-        entries = []
+        df = pd.DataFrame(columns=new_df.columns)
 
-    # Build a lookup by street name for O(1) access
-    street_map: dict[str, dict] = {entry["street"]: entry for entry in entries}
+    df = df.reindex(columns=new_df.columns)
 
-    for i, annotation in enumerate(annotations):
-        if i >= len(clips):
-            break  # guard: more annotations than clips (shouldn't happen)
+    combined = pd.concat([df, new_df], ignore_index=True)
+    combined = combined.drop_duplicates(subset=["video", "segment"], keep="last")
 
-        clip_dict = {"start": clips[i].start, "end": clips[i].end}
-
-        if annotation not in street_map:
-            street_map[annotation] = {"street": annotation, "clips": {}}
-
-        street_clips = street_map[annotation]["clips"]
-        if filename not in street_clips:
-            street_clips[filename] = []
-        street_clips[filename].append(clip_dict)
-
-    entries = list(street_map.values())
-    with json_path.open("w") as f:
-        json.dump(entries, f, indent=1)
+    combined.to_csv(csv_path, index=False)
 
 def draw_overlay(
     frame,
@@ -380,7 +377,7 @@ def finalize_timestamps(
     result = format_timestamps(state.timestamps)
     print("\nTimestamps :", result)
 
-    update_json(output_path, state.annotations, state.timestamps, source_path)
+    update_csv(output_path, state.annotations, state.timestamps, source_path)
     print(f"Saved at {output_path}")
     return result
 
