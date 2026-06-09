@@ -334,7 +334,7 @@ def get_timestamps(source_path: Path, output_path: Path) -> list[str] | str:
 
     while cap.isOpened() and state.current_frame < end_frame:
 
-        # ── Paused or waiting for annotation ────────────────────────────────
+        # Paused or waiting for annotation
         if state.is_paused or state.waiting_for_annotation:
             if state.last_display is not None:
                 display = draw_overlay(state.last_display, state)
@@ -352,7 +352,7 @@ def get_timestamps(source_path: Path, output_path: Path) -> list[str] | str:
                     break
             continue
 
-        # ── Normal playback ──────────────────────────────────────────────────
+        # Normal playback
         ret, frame = cap.read()
         if not ret:
             break
@@ -373,7 +373,6 @@ def get_timestamps(source_path: Path, output_path: Path) -> list[str] | str:
     cap.release()
     cv2.destroyAllWindows()
 
-    # ── Finalize ─────────────────────────────────────────────────────────────
     return finalize_timestamps(state, source_path, output_path, fps)
 
 def main() -> None:
