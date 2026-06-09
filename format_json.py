@@ -290,6 +290,34 @@ def collect_missing_annotations(state: PlaybackState) -> None:
         else:
             print(f"  Invalid — must be {ANNOTATION_FORMAT_HELP}.")
 
+def finalize_timestamps(
+    state: PlaybackState,
+    source_path: Path,
+    output_path: Path,
+    fps: float,
+) -> list | str:
+    """Close any open segment, collect missing annotations, save, and return.
+
+    *fps* is required to convert the stored `current_frame` value into seconds
+    when closing a trailing open segment.
+    """
+    if not state.timestamps:
+        print("\nNo timestamps registered.")
+        return []
+
+    # Close a trailing open segment (convert frames -> seconds)
+    if len(state.timestamps) % 2 == 1:
+        state.timestamps.append(int(state.current_frame / fps))
+
+    collect_missing_annotations(state)
+
+    result = format_timestamps(state.timestamps)
+    print("\nTimestamps :", result)
+
+    update_json(output_path, state.annotations, state.timestamps, source_path)
+    print(f"Saved at {output_path}")
+    return result
+
 def get_timestamps(source_path: Path, output_path: Path) -> list[str] | str:
     """Open *source_path*, let the user mark clips, and save results to *output_path*.
 
@@ -356,34 +384,6 @@ def get_timestamps(source_path: Path, output_path: Path) -> list[str] | str:
 
     # ── Finalize ─────────────────────────────────────────────────────────────
     return finalize_timestamps(state, source_path, output_path, fps)
-
-def finalize_timestamps(
-    state: PlaybackState,
-    source_path: Path,
-    output_path: Path,
-    fps: float,
-) -> list | str:
-    """Close any open segment, collect missing annotations, save, and return.
-
-    *fps* is required to convert the stored `current_frame` value into seconds
-    when closing a trailing open segment.
-    """
-    if not state.timestamps:
-        print("\nNo timestamps registered.")
-        return []
-
-    # Close a trailing open segment (convert frames -> seconds)
-    if len(state.timestamps) % 2 == 1:
-        state.timestamps.append(int(state.current_frame / fps))
-
-    collect_missing_annotations(state)
-
-    result = format_timestamps(state.timestamps)
-    print("\nTimestamps :", result)
-
-    update_json(output_path, state.annotations, state.timestamps, source_path)
-    print(f"Saved at {output_path}")
-    return result
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Interactive video timestamp marker.")
