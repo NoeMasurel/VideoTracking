@@ -15,10 +15,8 @@ N : forward 5 seconds
 Q / ESC : quit (saves any completed segments)
 """
 
-import time
 import cv2
 import argparse
-import csv
 import pandas as pd
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -88,9 +86,6 @@ def build_clips(timestamps: list[int]) -> list[Clip]:
             end=format_seconds(timestamps[i + 1]),
         ))
     return clips
-
-import pandas as pd
-from pathlib import Path
 
 def update_csv(
     csv_path: Path,
