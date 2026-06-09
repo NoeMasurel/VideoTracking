@@ -432,7 +432,7 @@ def get_timestamps(source_path: Path, output_path: Path, format: str) -> list[st
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Interactive video timestamp marker.")
-    ap.add_argument("-v", "--video", default="None", help="Source video path")
+    ap.add_argument("-v", "--video", default=None, help="Source video path")
     ap.add_argument("-o", "--output", default="data/timestamps.csv", help="Output file path")
     ap.add_argument("-f", "--format", default="csv", choices=["csv", "json"], help="Output format")
 
