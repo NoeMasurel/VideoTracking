@@ -389,7 +389,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Interactive video timestamp marker.")
     ap.add_argument(
         "-v", "--video",
-        default="videos/2025_08_11/20250811.mp4",
+        default=None,
         help="Source video path",
     )
     ap.add_argument(
