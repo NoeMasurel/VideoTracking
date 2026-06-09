@@ -1,81 +1,162 @@
+"""
+timestamps.py — Interactive video timestamp tool.
+
+Plays back a video and lets the user mark clip start/end points,
+annotate each clip with a street code (letter + digit, e.g. A1),
+and persist the results to a JSON file.
+
+Controls
+--------
+S : start a new segment (or close current one immediately)
+E : end the current segment
+P : pause / resume
+B : back 5 seconds
+N : forward 5 seconds
+Q / ESC : quit (saves any completed segments)
+"""
+
 import cv2
 import argparse
 import json
-import os
+from dataclasses import dataclass, field
+from pathlib import Path
 
-def format_seconds(total_seconds):
-    """Convert seconds to mm:ss string."""
+KEY_NONE = 255
+KEY_ENTER = 13
+KEY_SPACE = 32
+KEY_ESC = 27
+KEY_Q = 113
+KEY_P = 112
+KEY_N = 110
+KEY_B = 98
+KEY_S = 115
+KEY_E = 101
+KEY_BACKSPACE = 8 
+
+ANNOTATION_FORMAT_HELP = "one letter followed by one digit (e.g. A1, B3)"
+
+def is_valid_annotation(text):
+    """Return True if *text* matches the required annotation format (e.g. 'A1')."""
+    return len(text) == 2 and text[0].isalpha() and text[1].isdigit()
+
+@dataclass
+class Clip:
+    start: str
+    end: str
+
+@dataclass
+class PlaybackState:
+    timestamps: list[int] = field(default_factory=list)
+    annotations: list[str] = field(default_factory=list)
+    current_annotation: str = ""
+    waiting_for_annotation: bool = False
+    is_paused: bool = False
+    is_recording: bool = False
+    current_frame: int = 0
+    last_display: object = None   # last frame (numpy array)
+
+def format_seconds(total_seconds: int) -> str:
+    """Convert a second count to a mm:ss string."""
     m = total_seconds // 60
     s = total_seconds % 60
     return f"{m:02d}:{s:02d}"
 
-def format_timestamps(timestamps):
-    """Returns a string of timestamps in the format xx:xx-xx:xx separated by spaces"""
-    segments = []
+def format_timestamps(timestamps: list[int]) -> str:
+    """Return a space-separated string of 'mm:ss-mm:ss' segments.
+
+    An unpaired trailing timestamp is rendered as 'mm:ss-??:??' to signal
+    an still-open segment.
+    """
+    segments: list[str] = []
     for i in range(0, len(timestamps), 2):
         start = format_seconds(timestamps[i])
         end = format_seconds(timestamps[i + 1]) if i + 1 < len(timestamps) else "??:??"
         segments.append(f"{start}-{end}")
     return " ".join(segments)
 
-def build_clips(timestamps):
-    """Return a list of {file, start, end} dicts from a flat list of seconds."""
-    clips = []
+def build_clips(timestamps: list[int]) -> list[Clip]:
+    """Return a list of Clip objects from a flat list of start/end seconds.
+
+    Ignores any unclosed timestamps.
+    """
+    clips: list[Clip] = []
     for i in range(0, len(timestamps) - 1, 2):
-        clip_index = i // 2
-        clips.append({
-            "start": format_seconds(timestamps[i]),
-            "end": format_seconds(timestamps[i + 1]),
-        })
+        clips.append(Clip(
+            start=format_seconds(timestamps[i]),
+            end=format_seconds(timestamps[i + 1]),
+        ))
     return clips
 
-def update_json(json_path, annotations, timestamps, source_path):
-    filename = os.path.basename(source_path)
+def update_json(
+    json_path: Path,
+    annotations: list[str],
+    timestamps: list[int],
+    source_path: Path,
+) -> None:
+    """Append or update clip entries in the JSON data file.
+
+    Repeated calls for the same street + filename *append* new clips rather
+    than overwriting previous ones.
+    """
+    filename = source_path.name
     clips = build_clips(timestamps)
 
-    # Load existing data if file exists
-    if os.path.exists(json_path):
-        with open(json_path, "r") as f:
-            pl = json.load(f)
+    # Load existing data
+    if json_path.exists():
+        with json_path.open("r") as f:
+            try:
+                entries: list[dict] = json.load(f)
+            except json.JSONDecodeError:
+                print(f"Warning: {json_path} is not valid JSON — overwriting.")
+                entries = []
     else:
-        pl = []
+        entries = []
 
-    # Build a lookup by street name
-    street_map = {entry["street"]: entry for entry in pl}
+    # Build a lookup by street name for O(1) access
+    street_map: dict[str, dict] = {entry["street"]: entry for entry in entries}
 
     for i, annotation in enumerate(annotations):
+        if i >= len(clips):
+            break  # guard: more annotations than clips (shouldn't happen)
+
+        clip_dict = {"start": clips[i].start, "end": clips[i].end}
+
         if annotation not in street_map:
             street_map[annotation] = {"street": annotation, "clips": {}}
-        street_map[annotation]["clips"][filename] = [clips[i]]
 
-    # Rebuild list and save
-    pl = list(street_map.values())
-    with open(json_path, "w") as f:
-        json.dump(pl, f, indent=1)
+        street_clips = street_map[annotation]["clips"]
+        if filename not in street_clips:
+            street_clips[filename] = []
+        street_clips[filename].append(clip_dict)
 
-def draw_overlay(frame, timestamps, annotations, current_annotation, waiting_for_annotation, is_paused):
+    entries = list(street_map.values())
+    with json_path.open("w") as f:
+        json.dump(entries, f, indent=1)
+
+def draw_overlay(
+    frame,
+    state: PlaybackState,
+) -> object:
+    """Return a copy of *frame* with the current playback state on top."""
     out = frame.copy()
 
-    is_recording = len(timestamps) % 2 == 1
-
-    if timestamps:
-        seg_str = format_timestamps(timestamps)
-        
-        parts = seg_str.split(" ")
+    # --- Segment timeline strip ---
+    if state.timestamps:
+        parts = format_timestamps(state.timestamps).split()
         labeled = []
-        for idx, part in enumerate(parts):
-            ann = annotations[idx] if idx < len(annotations) else None
+        for i, part in enumerate(parts):
+            ann = state.annotations[i] if i < len(state.annotations) else None
             labeled.append(f"{part}[{ann}]" if ann else part)
         seg_str = " ".join(labeled)
 
         (tw, th), _ = cv2.getTextSize(seg_str, cv2.FONT_HERSHEY_SIMPLEX, 0.55, 1)
         cv2.rectangle(out, (6, 4), (14 + tw, 14 + th), (20, 20, 20), -1)
-        color = (0, 100, 230) if is_recording else (0, 230, 100)
+        color = (0, 100, 230) if state.is_recording else (0, 230, 100)
         cv2.putText(out, seg_str, (10, 10 + th),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1, cv2.LINE_AA)
 
-
-    if is_paused and not waiting_for_annotation:
+    # --- Paused indicator ---
+    if state.is_paused and not state.waiting_for_annotation:
         h, w = out.shape[:2]
         pause_str = "|| PAUSED"
         (pw, ph), _ = cv2.getTextSize(pause_str, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
@@ -84,9 +165,9 @@ def draw_overlay(frame, timestamps, annotations, current_annotation, waiting_for
         cv2.putText(out, pause_str, (x, 10 + ph),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 0), 2, cv2.LINE_AA)
 
-    # Annotation input prompt
-    if waiting_for_annotation:
-        prompt = f"Street name : {current_annotation}_"
+    # --- Annotation prompt ---
+    if state.waiting_for_annotation:
+        prompt = f"Street name : {state.current_annotation}_"
         (pw, ph), _ = cv2.getTextSize(prompt, cv2.FONT_HERSHEY_SIMPLEX, 0.65, 2)
         h, w = out.shape[:2]
         x, y = (w - pw) // 2, h // 2
@@ -97,188 +178,230 @@ def draw_overlay(frame, timestamps, annotations, current_annotation, waiting_for
 
     return out
 
-def get_timestamps(source_path, output):
-    json_path = output
-    start_frame = 0
-    timestamps  = []
-    annotations = []          # one entry per completed clip
-    current_annotation = ""   # being typed right now
-    waiting_for_annotation = False
-    is_paused = False
+def handle_annotation_key(key: int, state: PlaybackState) -> None:
+    """Process a keypress while the annotation prompt is active."""
+    if key == KEY_NONE:
+        return
+    if key in (KEY_ENTER, 10):  # Enter
+        if is_valid_annotation(state.current_annotation):
+            state.annotations.append(state.current_annotation.upper())
+            state.current_annotation = ""
+            state.waiting_for_annotation = False
+            state.is_paused = False
+    elif key == KEY_BACKSPACE:
+        state.current_annotation = state.current_annotation[:-1]
+    elif len(state.current_annotation) < 2 and KEY_SPACE <= key <= 126:
+        ch = chr(key)
+        if len(state.current_annotation) == 0 and ch.isalpha():
+            state.current_annotation += ch
+        elif len(state.current_annotation) == 1 and ch.isdigit():
+            state.current_annotation += ch
 
-    cap = cv2.VideoCapture(source_path)
+def handle_paused_key(key: int, state: PlaybackState, cap, fps: float, start_frame: int, end_frame: int) -> bool:
+    """Process a keypress while paused (but not waiting for annotation).
+
+    Returns True if the caller should quit.
+    """
+    if key == KEY_NONE:
+        return False
+    if key in (KEY_Q, KEY_ESC):
+        return True
+    if key in (KEY_P, KEY_SPACE):
+        state.is_paused = False
+    elif key == KEY_B:
+        new_pos = max(start_frame, state.current_frame - int(5 * fps))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
+        state.current_frame = new_pos
+        ret, frame = cap.read()
+        if ret:
+            state.last_display = frame
+            state.current_frame += 1
+    elif key == KEY_N:
+        new_pos = min(end_frame, state.current_frame + int(5 * fps))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
+        state.current_frame = new_pos
+        ret, frame = cap.read()
+        if ret:
+            state.last_display = frame
+            state.current_frame += 1
+    return False
+
+def handle_playback_key(key: int, state: PlaybackState, cap, fps: float, start_frame: int, end_frame: int) -> bool:
+    """Process a keypress during normal playback.
+
+    Returns True if the caller should quit.
+    """
+    if key == KEY_NONE:
+        return False
+    if key in (KEY_Q, KEY_ESC):
+        return True
+    if key in (KEY_P, KEY_SPACE):
+        state.is_paused = True
+    elif key == KEY_B:
+        new_pos = max(start_frame, state.current_frame - int(5 * fps))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
+        state.current_frame = new_pos
+    elif key == KEY_N:
+        new_pos = min(end_frame, state.current_frame + int(5 * fps))
+        cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
+        state.current_frame = new_pos
+    elif key == KEY_S :
+        _handle_start_key(state, fps)
+    elif key == KEY_E:
+        _handle_end_key(state, fps)
+    return False
+
+def _handle_start_key(state: PlaybackState, fps: float) -> None:
+    """S : start a new segment, or close-and-reopen the current one."""
+    t = int(state.current_frame / fps)
+    if state.is_recording:
+        # Close current segment immediately and open a new annotation prompt
+        state.timestamps.append(t)
+        state.timestamps.append(t)
+        state.is_recording = False
+        state.waiting_for_annotation = True
+        state.is_paused = True
+    else:
+        state.is_recording = True
+        state.timestamps.append(t)
+
+def _handle_end_key(state: PlaybackState, fps: float) -> None:
+    """E: end the current segment."""
+    t = int(state.current_frame / fps)
+    if state.is_recording:
+        state.is_recording = False
+        state.timestamps.append(t)
+        state.waiting_for_annotation = True
+        state.is_paused = True
+    else:
+        if state.timestamps:
+            state.timestamps.append(state.timestamps[-1])
+            state.timestamps.append(t)
+            state.waiting_for_annotation = True
+            state.is_paused = True
+
+def collect_missing_annotations(state: PlaybackState) -> None:
+    """Prompt the user in the terminal for any clips that still lack annotations."""
+    while len(state.annotations) < len(state.timestamps) // 2:
+        clip_num = len(state.annotations) + 1
+        raw = input(f"Annotation for clip {clip_num} ({ANNOTATION_FORMAT_HELP}): ").strip()
+        if is_valid_annotation(raw):
+            state.annotations.append(raw.upper())
+        else:
+            print(f"Invalid : must be {ANNOTATION_FORMAT_HELP}.")
+
+def get_timestamps(source_path: Path, output_path: Path) -> list[str] | str:
+    """Open *source_path*, let the user mark clips, and save results to *output_path*.
+
+    Returns the formatted timestamp string on success, or an empty list if
+    no timestamps were registered.
+    """
+    state = PlaybackState()
+    start_frame = 0
+
+    cap = cv2.VideoCapture(str(source_path))
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {source_path}")
 
-    fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    end_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
+    fps        = cap.get(cv2.CAP_PROP_FPS) or 30
+    end_frame  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    state.current_frame = start_frame
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
 
     print(f"Playing back {source_path}")
     print("Controls: S/Space=start  E=end  P=pause/play  B=back 5s  N=forward 5s  Q/ESC=quit")
 
-    current_frame = start_frame
-    is_recording  = False
-    last_display  = None   # hold the last rendered frame while paused
+    quit_requested = False
 
-    while cap.isOpened() and current_frame < end_frame:
+    while cap.isOpened() and state.current_frame < end_frame:
 
-        # Paused (or waiting for annotation): redisplay last frame, poll keys ──
-        if is_paused or waiting_for_annotation:
-            if last_display is not None:
-                display = draw_overlay(last_display, timestamps, annotations,
-                                       current_annotation, waiting_for_annotation, is_paused)
-                cv2.imshow("Playback", display)
+        # ── Paused or waiting for annotation ────────────────────────────────
+        if state.is_paused or state.waiting_for_annotation:
+            if state.last_display is not None:
+                display = draw_overlay(state.last_display, state)
+                cv2.imshow("Playback", display) # type: ignore
 
-            key = cv2.waitKey(30) & 0xFF  # 30 ms poll so the window stays responsive
+            key = cv2.waitKey(30) & 0xFF
 
-            # Annotation input mode
-            if waiting_for_annotation:
-                if key == 255:
-                    continue
-                if key in (13, 10):  # Enter
-                    if len(current_annotation) == 2 and current_annotation[0].isalpha() and current_annotation[1].isdigit():
-                        annotations.append(current_annotation.upper())
-                        current_annotation = ""
-                        waiting_for_annotation = False
-                        # Stay paused after annotation so user can review before resuming
-                        is_paused = False
-                elif key == 8:  # Backspace
-                    current_annotation = current_annotation[:-1]
-                elif len(current_annotation) < 2 and 32 <= key <= 126:
-                    ch = chr(key)
-                    if len(current_annotation) == 0 and ch.isalpha():
-                        current_annotation += ch
-                    elif len(current_annotation) == 1 and ch.isdigit():
-                        current_annotation += ch
-                continue  # block other controls while waiting for annotation
-
-            # Paused (no annotation needed): only allow a subset of keys
-            if key == 255:
-                continue
-
-            match key:
-                case 113 | 27:  # q / ESC
+            if state.waiting_for_annotation:
+                handle_annotation_key(key, state)
+            else:
+                quit_requested = handle_paused_key(
+                    key, state, cap, fps, start_frame, end_frame
+                )
+                if quit_requested:
                     break
-                case 112: # p : resume
-                    is_paused = False
-                case 32: # Space : resume (toggle)
-                    is_paused = False
-                case 98: # b : back 5 s (also works while paused)
-                    new_pos = max(start_frame, current_frame - int(5 * fps))
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
-                    current_frame = new_pos
-                    ret, frame = cap.read()
-                    if ret:
-                        last_display = frame
-                        current_frame += 1
-                case 110:  # n : forward 5 s
-                    new_pos = min(end_frame, current_frame + int(5 * fps))
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
-                    current_frame = new_pos
-                    ret, frame = cap.read()
-                    if ret:
-                        last_display = frame
-                        current_frame += 1
-            continue  # don't advance to next frame while paused
+            continue
 
-        # Normal playback: read next frame
+        # ── Normal playback ──────────────────────────────────────────────────
         ret, frame = cap.read()
         if not ret:
             break
-        current_frame += 1
-        last_display = frame
+        state.current_frame += 1
+        state.last_display = frame
 
-        display = draw_overlay(frame, timestamps, annotations,
-                               current_annotation, waiting_for_annotation, is_paused)
-        cv2.imshow("Playback", display)
+        display = draw_overlay(frame, state)
+        cv2.imshow("Playback", display) # type: ignore
+
 
         key = cv2.waitKey(1) & 0xFF
-        if key == 255:
-            continue
-
-        # Normal playback controls
-        match key:
-            case 113 | 27: # q or ESC
-                break
-
-            case 112: # p : pause
-                is_paused = True
-
-            case 98: # b : back 5 s
-                new_pos = max(start_frame, current_frame - int(5 * fps))
-                cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
-                current_frame = new_pos
-
-            case 110: # n : forward 5 s
-                new_pos = min(end_frame, current_frame + int(5 * fps))
-                cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
-                current_frame = new_pos
-
-            case 115 | 32:  # s or space : start / restart segment
-                if is_recording:
-                    timestamps.append(int(current_frame / fps))
-                    timestamps.append(int(current_frame / fps))
-                    waiting_for_annotation = True   # closed a segment → auto-pause
-                    is_paused = True
-                else:
-                    is_recording = True
-                    timestamps.append(int(current_frame / fps))
-
-            case 101:  # e : end segment
-                if is_recording:
-                    is_recording = False
-                    timestamps.append(int(current_frame / fps))
-                    waiting_for_annotation = True   # auto-pause for annotation
-                    is_paused = True
-                else:
-                    if timestamps:
-                        timestamps.append(timestamps[-1])
-                        timestamps.append(int(current_frame / fps))
-                        waiting_for_annotation = True
-                        is_paused = True
-
-            case _:
-                pass
+        quit_requested = handle_playback_key(
+            key, state, cap, fps, start_frame, end_frame
+        )
+        if quit_requested:
+            break
 
     cap.release()
     cv2.destroyAllWindows()
 
-    if timestamps:
-        if len(timestamps) % 2 == 1:  # close last open segment
-            timestamps.append(int(current_frame / fps))
+    # ── Finalize ─────────────────────────────────────────────────────────────
+    return finalize_timestamps(state, source_path, output_path, fps)
 
-        # If the last clip still has no annotation, ask in the terminal
-        while len(annotations) < len(timestamps) // 2:
-            raw = input(f"Annotation for clip {len(annotations) + 1} (letter + digit, e.g. A1): ").strip()
-            if len(raw) == 2 and raw[0].isalpha() and raw[1].isdigit():
-                annotations.append(raw.upper())
-            else:
-                print(" : Must be one letter followed by one digit (e.g. A1, B3).")
+def finalize_timestamps(
+    state: PlaybackState,
+    source_path: Path,
+    output_path: Path,
+    fps: float,
+) -> list | str:
+    """Close any open segment, collect missing annotations, save, and return.
 
-        result = format_timestamps(timestamps)
-        print("\nTimestamps :", result)
-
-        update_json(json_path, annotations, timestamps, source_path)
-
-        print(f"Saved at {json_path}")
-        return result
-
-    else:
+    *fps* is required to convert the stored `current_frame` value into seconds
+    when closing a trailing open segment.
+    """
+    if not state.timestamps:
         print("\nNo timestamps registered.")
         return []
 
-def main():
-    ap = argparse.ArgumentParser(description="Outputs a list of timestamps")
-    ap.add_argument("-v", "--video", default="videos/2025_08_11/20250811.mp4", help="Source video path")
-    ap.add_argument("-o", "--output", default="data/timestamps.json", help="Output file path")
+    if len(state.timestamps) % 2 == 1:
+        state.timestamps.append(int(state.current_frame / fps))
 
+    collect_missing_annotations(state)
+
+    result = format_timestamps(state.timestamps)
+    print("\nTimestamps :", result)
+
+    update_json(output_path, state.annotations, state.timestamps, source_path)
+    print(f"Saved at {output_path}")
+    return result
+
+def main() -> None:
+    ap = argparse.ArgumentParser(description="Interactive video timestamp marker.")
+    ap.add_argument(
+        "-v", "--video",
+        default="videos/2025_08_11/20250811.mp4",
+        help="Source video path",
+    )
+    ap.add_argument(
+        "-o", "--output",
+        default="data/timestamps.json",
+        help="Output JSON file path",
+    )
     args = ap.parse_args()
-    input_file = args.video or input("Input file (path/to/vid.mp4) : ")
-    output_file = args.output
-    get_timestamps(input_file, output_file)
 
+    source_path = Path(args.video)
+    output_path = Path(args.output)
+
+    get_timestamps(source_path, output_path)
 
 if __name__ == "__main__":
     main()
