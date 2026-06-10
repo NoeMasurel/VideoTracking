@@ -51,7 +51,7 @@ class Clip:
 class PlaybackState:
     timestamps: list[int] = field(default_factory=list)
     annotations: list[str] = field(default_factory=list)
-    fps: float = 30
+    fps: float = 0
     current_annotation: str = ""
     waiting_for_annotation: bool = False
     is_paused: bool = False
@@ -78,7 +78,7 @@ def format_timestamps(timestamps: list[int], fps : float) -> str:
         segments.append(f"{start}-{end}")
     return " ".join(segments)
 
-def build_clips(timestamps: list[int],) -> list[Clip]:
+def build_clips(timestamps: list[int]) -> list[Clip]:
     """Return a list of Clip objects from a flat list of start/end seconds.
 
     Ignores any unclosed timestamps.
@@ -184,7 +184,7 @@ def draw_overlay(
 
     # --- Segment timeline strip ---
     if state.timestamps:
-        parts = format_timestamps(state.timestamps, state.fps ).split()
+        parts = format_timestamps(state.timestamps, state.fps).split()
         labeled = []
         for i, part in enumerate(parts):
             ann = state.annotations[i] if i < len(state.annotations) else None
@@ -239,7 +239,7 @@ def handle_annotation_key(key: int, state: PlaybackState) -> None:
         elif len(state.current_annotation) == 1 and ch.isdigit():
             state.current_annotation += ch
 
-def handle_paused_key(key: int, state: PlaybackState, cap, fps: float, start_frame: int, end_frame: int) -> bool:
+def handle_paused_key(key: int, state: PlaybackState, cap, start_frame: int, end_frame: int) -> bool:
     """Process a keypress while paused (but not waiting for annotation).
 
     Returns True if the caller should quit.
@@ -251,7 +251,7 @@ def handle_paused_key(key: int, state: PlaybackState, cap, fps: float, start_fra
     if key in (KEY_P, KEY_SPACE):
         state.is_paused = False
     elif key == KEY_B:
-        new_pos = max(start_frame, state.current_frame - int(5 * fps))
+        new_pos = max(start_frame, state.current_frame - int(5 * state.fps))
         cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
         state.current_frame = new_pos
         ret, frame = cap.read()
@@ -259,7 +259,7 @@ def handle_paused_key(key: int, state: PlaybackState, cap, fps: float, start_fra
             state.last_display = frame
             state.current_frame += 1
     elif key == KEY_N:
-        new_pos = min(end_frame, state.current_frame + int(5 * fps))
+        new_pos = min(end_frame, state.current_frame + int(5 * state.fps))
         cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
         state.current_frame = new_pos
         ret, frame = cap.read()
@@ -268,7 +268,7 @@ def handle_paused_key(key: int, state: PlaybackState, cap, fps: float, start_fra
             state.current_frame += 1
     return False
 
-def handle_playback_key(key: int, state: PlaybackState, cap, fps: float, start_frame: int, end_frame: int) -> bool:
+def handle_playback_key(key: int, state: PlaybackState, cap, start_frame: int, end_frame: int) -> bool:
     """Process a keypress during normal playback.
 
     Returns True if the caller should quit.
@@ -280,20 +280,20 @@ def handle_playback_key(key: int, state: PlaybackState, cap, fps: float, start_f
     if key in (KEY_P, KEY_SPACE):
         state.is_paused = True
     elif key == KEY_B:
-        new_pos = max(start_frame, state.current_frame - int(5 * fps))
+        new_pos = max(start_frame, state.current_frame - int(5 * state.fps))
         cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
         state.current_frame = new_pos
     elif key == KEY_N:
-        new_pos = min(end_frame, state.current_frame + int(5 * fps))
+        new_pos = min(end_frame, state.current_frame + int(5 * state.fps))
         cap.set(cv2.CAP_PROP_POS_FRAMES, new_pos)
         state.current_frame = new_pos
     elif key == KEY_S :
-        _handle_start_key(state, fps)
+        _handle_start_key(state)
     elif key == KEY_E:
-        _handle_end_key(state, fps)
+        _handle_end_key(state)
     return False
 
-def _handle_start_key(state: PlaybackState, fps: float) -> None:
+def _handle_start_key(state: PlaybackState) -> None:
     """S : start a new segment, or close-and-reopen the current one."""
     t = state.current_frame
     if state.is_recording:
@@ -307,7 +307,7 @@ def _handle_start_key(state: PlaybackState, fps: float) -> None:
         state.is_recording = True
         state.timestamps.append(t)
 
-def _handle_end_key(state: PlaybackState, fps: float) -> None:
+def _handle_end_key(state: PlaybackState) -> None:
     """E: end the current segment."""
     t = state.current_frame
     if state.is_recording:
@@ -336,7 +336,6 @@ def finalize_timestamps(
     state: PlaybackState,
     source_path: Path,
     output_path: Path,
-    fps: float,
     format : str
 ) -> list | str:
     """Close any open segment, collect missing annotations, save, and return.
@@ -353,7 +352,7 @@ def finalize_timestamps(
 
     collect_missing_annotations(state)
 
-    result = format_timestamps(state.timestamps, fps)
+    result = format_timestamps(state.timestamps, state.fps)
     print("\nTimestamps :", result)
 
     if format == "json" :
@@ -377,7 +376,7 @@ def get_timestamps(source_path: Path, output_path: Path, format: str) -> list[st
     if not cap.isOpened():
         raise ValueError(f"Cannot open video: {source_path}")
 
-    fps        = cap.get(cv2.CAP_PROP_FPS) or 30
+    state.fps = cap.get(cv2.CAP_PROP_FPS) or 30
     end_frame  = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     state.current_frame = start_frame
     cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
@@ -401,7 +400,7 @@ def get_timestamps(source_path: Path, output_path: Path, format: str) -> list[st
                 handle_annotation_key(key, state)
             else:
                 quit_requested = handle_paused_key(
-                    key, state, cap, fps, start_frame, end_frame
+                    key, state, cap, start_frame, end_frame
                 )
                 if quit_requested:
                     break
@@ -420,7 +419,7 @@ def get_timestamps(source_path: Path, output_path: Path, format: str) -> list[st
 
         key = cv2.waitKey(1) & 0xFF
         quit_requested = handle_playback_key(
-            key, state, cap, fps, start_frame, end_frame
+            key, state, cap, start_frame, end_frame
         )
         if quit_requested:
             break
@@ -429,7 +428,7 @@ def get_timestamps(source_path: Path, output_path: Path, format: str) -> list[st
     cv2.destroyAllWindows()
 
 
-    return finalize_timestamps(state, source_path, output_path, fps, format)
+    return finalize_timestamps(state, source_path, output_path, format)
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Interactive video timestamp marker.")
@@ -442,8 +441,8 @@ def main() -> None:
     ext = f".{args.format}"
     output_path = Path(args.output).with_suffix(ext)
 
-
     get_timestamps(source_path, output_path, args.format)
 
 if __name__ == "__main__":
     main()
+    
