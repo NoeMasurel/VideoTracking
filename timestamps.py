@@ -22,6 +22,8 @@ import json
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from sympy import fps
+
 KEY_NONE = 255
 KEY_ENTER = 13
 KEY_SPACE = 32
@@ -42,13 +44,14 @@ def is_valid_annotation(text):
 
 @dataclass
 class Clip:
-    start: str
-    end: str
+    start: int
+    end: int
 
 @dataclass
 class PlaybackState:
     timestamps: list[int] = field(default_factory=list)
     annotations: list[str] = field(default_factory=list)
+    fps: float = 30
     current_annotation: str = ""
     waiting_for_annotation: bool = False
     is_paused: bool = False
@@ -62,20 +65,20 @@ def format_seconds(total_seconds: int) -> str:
     s = total_seconds % 60
     return f"{m:02d}:{s:02d}"
 
-def format_timestamps(timestamps: list[int]) -> str:
-    """Return a space-separated string of 'mm:ss-mm:ss' segments.
+def format_timestamps(timestamps: list[int], fps : float) -> str:
+    """Return a space-separated string of 'mm:ss-mm:ss' segments from a list of frames.
 
     An unpaired trailing timestamp is rendered as 'mm:ss-??:??' to signal
     an still-open segment.
     """
     segments: list[str] = []
     for i in range(0, len(timestamps), 2):
-        start = format_seconds(timestamps[i])
-        end = format_seconds(timestamps[i + 1]) if i + 1 < len(timestamps) else "??:??"
+        start = format_seconds(int(timestamps[i] / fps))
+        end = format_seconds(int(timestamps[i + 1] / fps)) if i + 1 < len(timestamps) else "??:??"
         segments.append(f"{start}-{end}")
     return " ".join(segments)
 
-def build_clips(timestamps: list[int]) -> list[Clip]:
+def build_clips(timestamps: list[int],) -> list[Clip]:
     """Return a list of Clip objects from a flat list of start/end seconds.
 
     Ignores any unclosed timestamps.
@@ -83,8 +86,8 @@ def build_clips(timestamps: list[int]) -> list[Clip]:
     clips: list[Clip] = []
     for i in range(0, len(timestamps) - 1, 2):
         clips.append(Clip(
-            start=format_seconds(timestamps[i]),
-            end=format_seconds(timestamps[i + 1]),
+            start=timestamps[i],
+            end=timestamps[i + 1]
         ))
     return clips
 
@@ -181,7 +184,7 @@ def draw_overlay(
 
     # --- Segment timeline strip ---
     if state.timestamps:
-        parts = format_timestamps(state.timestamps).split()
+        parts = format_timestamps(state.timestamps, state.fps ).split()
         labeled = []
         for i, part in enumerate(parts):
             ann = state.annotations[i] if i < len(state.annotations) else None
@@ -292,7 +295,7 @@ def handle_playback_key(key: int, state: PlaybackState, cap, fps: float, start_f
 
 def _handle_start_key(state: PlaybackState, fps: float) -> None:
     """S : start a new segment, or close-and-reopen the current one."""
-    t = int(state.current_frame / fps)
+    t = state.current_frame
     if state.is_recording:
         # Close current segment immediately and open a new annotation prompt
         state.timestamps.append(t)
@@ -306,7 +309,7 @@ def _handle_start_key(state: PlaybackState, fps: float) -> None:
 
 def _handle_end_key(state: PlaybackState, fps: float) -> None:
     """E: end the current segment."""
-    t = int(state.current_frame / fps)
+    t = state.current_frame
     if state.is_recording:
         state.is_recording = False
         state.timestamps.append(t)
@@ -346,11 +349,11 @@ def finalize_timestamps(
         return []
 
     if len(state.timestamps) % 2 == 1:
-        state.timestamps.append(int(state.current_frame / fps))
+        state.timestamps.append(state.current_frame)
 
     collect_missing_annotations(state)
 
-    result = format_timestamps(state.timestamps)
+    result = format_timestamps(state.timestamps, fps)
     print("\nTimestamps :", result)
 
     if format == "json" :
@@ -428,11 +431,9 @@ def get_timestamps(source_path: Path, output_path: Path, format: str) -> list[st
 
     return finalize_timestamps(state, source_path, output_path, fps, format)
 
-
-
 def main() -> None:
     ap = argparse.ArgumentParser(description="Interactive video timestamp marker.")
-    ap.add_argument("-v", "--video", default=None, help="Source video path")
+    ap.add_argument("-v", "--video", default=None, required=True, help="Source video path")
     ap.add_argument("-o", "--output", default="data/timestamps.csv", help="Output file path")
     ap.add_argument("-f", "--format", default="csv", choices=["csv", "json"], help="Output format")
 
