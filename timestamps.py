@@ -15,6 +15,8 @@ N : forward 5 seconds
 Q / ESC : quit (saves any completed segments)
 """
 
+from re import S
+
 import cv2
 import argparse
 import pandas as pd
@@ -26,6 +28,7 @@ KEY_NONE = 255
 KEY_ENTER = 13
 KEY_SPACE = 32
 KEY_ESC = 27
+KEY_C = 99
 KEY_Q = 113
 KEY_P = 112
 KEY_N = 110
@@ -264,6 +267,10 @@ def handle_paused_key(key: int, state: PlaybackState, cap, start_frame: int, end
         if ret:
             state.last_display = frame
             state.current_frame += 1
+    elif key == KEY_S :
+        _handle_start_key(state)
+    elif key == KEY_E:
+        _handle_end_key(state)
     return False
 
 def handle_playback_key(key: int, state: PlaybackState, cap, start_frame: int, end_frame: int) -> bool:
@@ -289,6 +296,8 @@ def handle_playback_key(key: int, state: PlaybackState, cap, start_frame: int, e
         _handle_start_key(state)
     elif key == KEY_E:
         _handle_end_key(state)
+    elif key == KEY_C:
+        _handle_delete_key(state)
     return False
 
 def _handle_start_key(state: PlaybackState) -> None:
@@ -320,6 +329,15 @@ def _handle_end_key(state: PlaybackState) -> None:
             state.waiting_for_annotation = True
             state.is_paused = True
 
+def _handle_delete_key(state: PlaybackState) -> None :
+    if state.timestamps:
+        state.timestamps.pop()
+        if len(state.timestamps) % 2 == 1:
+            state.annotations.pop()
+            state.is_recording = True
+        else :
+            state.is_recording = False
+        
 def collect_missing_annotations(state: PlaybackState) -> None:
     """Prompt the user in the terminal for any clips that still lack annotations."""
     while len(state.annotations) < len(state.timestamps) // 2:
