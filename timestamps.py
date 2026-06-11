@@ -15,6 +15,8 @@ N : forward 5 seconds
 Q / ESC : quit (saves any completed segments)
 """
 
+from ast import arg
+
 import cv2
 import argparse
 import pandas as pd
@@ -363,7 +365,7 @@ def finalize_timestamps(
     print(f"Saved at {output_path} in {format}.")
     return result
 
-def get_timestamps(source_path: Path, output_path: Path, format: str) -> list[str] | str:
+def get_timestamps(source_path: Path, output_path: Path, format: str, speed: float) -> list[str] | str:
     """Open *source_path*, let the user mark clips, and save results to *output_path*.
 
     Returns the formatted timestamp string on success, or an empty list if
@@ -385,6 +387,8 @@ def get_timestamps(source_path: Path, output_path: Path, format: str) -> list[st
     print("Controls: S/Space=start  E=end  P=pause/play  B=back 5s  N=forward 5s  Q/ESC=quit")
 
     quit_requested = False
+
+    delay_ms = max(1, int(1000 / (state.fps * speed)))
 
     while cap.isOpened() and state.current_frame < end_frame:
 
@@ -417,7 +421,7 @@ def get_timestamps(source_path: Path, output_path: Path, format: str) -> list[st
         cv2.imshow("Playback", display) # type: ignore
 
 
-        key = cv2.waitKey(1) & 0xFF
+        key = cv2.waitKey(delay_ms) & 0xFF
         quit_requested = handle_playback_key(
             key, state, cap, start_frame, end_frame
         )
@@ -435,13 +439,18 @@ def main() -> None:
     ap.add_argument("-v", "--video", default=None, required=True, help="Source video path")
     ap.add_argument("-o", "--output", default="data/timestamps.csv", help="Output file path")
     ap.add_argument("-f", "--format", default="csv", choices=["csv", "json"], help="Output format")
+    ap.add_argument("-s", "--speed", default=1.5, type=float, help="Playback speed")
 
     args = ap.parse_args()
     source_path = Path(args.video)
     ext = f".{args.format}"
     output_path = Path(args.output).with_suffix(ext)
+    speed = args.speed
 
-    get_timestamps(source_path, output_path, args.format)
+    if speed <= 0 : 
+        raise ValueError(f"Cannot have non positive speed")
+
+    get_timestamps(source_path, output_path, args.format, speed)
 
 if __name__ == "__main__":
     main()
