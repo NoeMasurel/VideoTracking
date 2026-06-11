@@ -15,16 +15,12 @@ N : forward 5 seconds
 Q / ESC : quit (saves any completed segments)
 """
 
-from ast import arg
-
 import cv2
 import argparse
 import pandas as pd
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-
-from sympy import fps
 
 KEY_NONE = 255
 KEY_ENTER = 13
