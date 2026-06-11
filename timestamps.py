@@ -15,8 +15,6 @@ N : forward 5 seconds
 Q / ESC : quit (saves any completed segments)
 """
 
-from re import S
-
 import cv2
 import argparse
 import pandas as pd
