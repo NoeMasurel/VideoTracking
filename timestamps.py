@@ -124,7 +124,6 @@ def update_csv(
     df = df.reindex(columns=new_df.columns)
 
     combined = pd.concat([df, new_df], ignore_index=True)
-    combined = combined.drop_duplicates(subset=["video", "segment"], keep="last")
 
     combined.to_csv(csv_path, index=False)
 
