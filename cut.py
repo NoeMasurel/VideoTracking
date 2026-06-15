@@ -1,56 +1,90 @@
 import ffmpeg
 import argparse
 from pathlib import Path
-import timestamps as ts
+import pandas as pd
 
 """
-USAGE : 
+USAGE :
 
     --video : specify the input path
-    --timestamps : specifiy the timestamps, format xx:xx seperated by spaces.
+    --timestamps : specify the timestamps file (csv with columns: video,segment,start,end)
 
 """
 
+def get_fps(input_file):
+    probe = ffmpeg.probe(str(input_file))
+    video_stream = next(
+        s for s in probe["streams"] if s["codec_type"] == "video"
+    )
+    num, den = video_stream["r_frame_rate"].split("/")
+    return int(num) / int(den)
 
-def mintosec(time):
-    m, s = map(int, time.split(':'))
-    return m * 60 + s
+def frames_to_seconds(frame, fps):
+    return frame / fps
 
-def splitts(ts):
-    start_str, end_str = ts.split('-')
-    start = mintosec(start_str)
-    end = mintosec(end_str)
+def format_seconds(seconds):
+    m, s = divmod(int(seconds), 60)
+    h, m = divmod(m, 60)
+    return f"{h:02}:{m:02}:{s:02}" if h else f"{m:02}:{s:02}"
 
-    duration = end - start
-    if duration <= 0:
-        raise ValueError(f"Bad timestamp (end <= start): {ts}")
+def prompt_user(segment_name, start_frame, end_frame, start_sec, end_sec):
+    duration_sec = end_sec - start_sec
+    print(
+        f"\n  Segment : {segment_name}\n"
+        f"  Start   : frame {start_frame}  ({format_seconds(start_sec)})\n"
+        f"  End     : frame {end_frame}  ({format_seconds(end_sec)})\n"
+        f"  Duration: {end_frame - start_frame} frames  ({format_seconds(duration_sec)})\n"
+    )
+    while True:
+        answer = input("  Extract this segment? [y/n/q to quit] : ").strip().lower()
+        if answer in ("y", "n", "q"):
+            return answer
+        print("  Please enter y, n, or q.")
 
-    return start, duration
-
-def extract_clips(input_file, timestamps):
+def extract_clips(input_file, segments, fps):
     p = Path(input_file)
+    extracted = 0
+    skipped = 0
 
-    for i, ts in enumerate(timestamps):
+    for i, (segment_name, start_frame, end_frame) in enumerate(segments):
+        start_sec = frames_to_seconds(start_frame, fps)
+        end_sec   = frames_to_seconds(end_frame, fps)
+
+        choice = prompt_user(segment_name, start_frame, end_frame, start_sec, end_sec)
+
+        if choice == "q":
+            print("\nQuitting early.")
+            break
+
+        if choice == "n":
+            print("  → Skipped.")
+            skipped += 1
+            continue
+
+        # choice == "y"
         try:
-            output = str(p.with_name(f"{p.stem}_results_{i}.mp4"))
-            start, duration = splitts(ts)
+            duration_sec = end_sec - start_sec
+            if duration_sec <= 0:
+                raise ValueError(f"Bad segment: start={start_frame}, end={end_frame}")
+
+            safe_name = str(segment_name).replace(" ", "_")
+            output = str(p.with_name(f"{p.stem}_{safe_name}_{i}.mp4"))
 
             (
                 ffmpeg
-                .input(input_file, ss=start, t=duration)
-                .output(
-                    output,
-                    vcodec="libx264",
-                    acodec="aac",
-                    crf=18
-                )
+                .input(str(input_file), ss=start_sec, t=duration_sec)
+                .output(output, vcodec="libx264", acodec="aac", crf=18)
                 .run(overwrite_output=True)
             )
 
-            print(f"Created: {output}")
+            print(f"  → Created: {output}")
+            extracted += 1
 
         except Exception as e:
-            print(f"Skipping timestamp '{ts}' (index {i}) : {e}")
+            print(f"  → Error extracting segment {i}: {e}")
+            skipped += 1
+
+    print(f"\nDone. {extracted} extracted, {skipped} skipped.")
 
 def validate_file(path_str, label):
     path = Path(path_str)
@@ -67,45 +101,42 @@ def main():
     ap = argparse.ArgumentParser(description="Cut video into clips using timestamps")
 
     ap.add_argument("-v", "--video", required=True, help="Source video path")
-
-    group = ap.add_mutually_exclusive_group(required=True)
-    group.add_argument("-m", "--manual", action="store_true", help="Select timestamps manually")
-    group.add_argument("-ts", "--timestamps", help="Timestamps file")
+    ap.add_argument("-ts", "--timestamps", required=True, help="Timestamps CSV file")
 
     args = ap.parse_args()
 
-    input_file = args.video or input("Input file (path/to/vid.mp4): ")
-
     try:
-        input_file = validate_file(input_file, "Video file")
+        input_file = validate_file(args.video, "Video file")
     except Exception as e:
         print(f"Error: {e}")
         return
-    
-    if args.manual:
-        print("Manual select")
-        timestamps = ts.get_timestamps(input_file).split() # type: ignore
-    else : 
-        print("Using the timestamps file")
-        ts_file = args.timestamps or input("Timestamps file (timestamps.txt): ")
-        try : 
-            ts_file = validate_file(ts_file, "Timestamps file")
-        except Exception as e:
-            print(f"Error: {e}")
-            return
-        try:
-            with open(ts_file, "r") as f:
-                timestamps = [t for t in f.read().split() if "-" in t]
-        except Exception as e:
-            print(f"Failed to read timestamps: {e}")
-            return
-        if not timestamps:
-            print("No valid timestamps found in file")
-            return
 
-    print(f"Processing {len(timestamps)} clips...")
+    try:
+        tt_file = validate_file(args.timestamps, "Timestamps file")
+        if tt_file.suffix != ".csv":
+            raise TypeError("Timestamps file must be a .csv")
+    except Exception as e:
+        print(f"Error: {e}")
+        return
 
-    extract_clips(input_file, timestamps)
+    df = pd.read_csv(tt_file)
+    df = df[df["video"] == input_file.name]
+
+    if df.empty:
+        print(f"No segments found for '{input_file.name}' in {tt_file}.")
+        return
+
+    try:
+        fps = get_fps(input_file)
+        print(f"\nDetected FPS: {fps:.4f}")
+    except Exception as e:
+        print(f"Error reading FPS from video: {e}")
+        return
+
+    segments = list(zip(df["segment"], df["start"], df["end"]))
+    print(f"Found {len(segments)} segment(s) for '{input_file.name}'.")
+
+    extract_clips(input_file, segments, fps)
 
 if __name__ == "__main__":
     main()
