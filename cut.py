@@ -73,7 +73,7 @@ def extract_clips(input_file, segments, fps):
             (
                 ffmpeg
                 .input(str(input_file), ss=start_sec, t=duration_sec)
-                .output(output, vcodec="libx264", acodec="aac", crf=18)
+                .output(output, vcodec="copy", acodec="copy")
                 .run(overwrite_output=True)
             )
 

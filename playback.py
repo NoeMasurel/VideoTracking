@@ -72,7 +72,7 @@ def draw_hud(frame, frame_idx, total_frames, paused, class_counts):
 
 def main():
     ap = argparse.ArgumentParser(description="Replay video with saved bounding boxes.")
-    ap.add_argument("-j", "--json",  default="detections.json", help="Path to detections JSON")
+    ap.add_argument("-j", "--json",  default="data/detections.json", help="Path to detections JSON")
     ap.add_argument("-v","--video", default=None, help="Override source video path")
     ap.add_argument("-s", "--speed", default = 1, help="Playback speed")
     args = ap.parse_args()
@@ -161,9 +161,9 @@ def main():
 
             draw_bbox(frame, bbox, int(track_id), class_name, conf) # type: ignore
 
-        draw_hud(frame, current_frame - start_frame, total_analyzed, fps, paused, class_counts) # type: ignore
+        draw_hud(frame, current_frame - start_frame, total_analyzed, paused, class_counts) # type: ignore
 
-        cv2.imshow("Playback - detections.json", frame) # type: ignore
+        cv2.imshow("Playback", frame) # type: ignore
 
         key = cv2.waitKey(1 if paused else delay_ms) & 0xFF
         if key in (ord("q"), 27):          # q or ESC

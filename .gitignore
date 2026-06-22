@@ -1,7 +1,7 @@
 /videos
 *.pt
 *.json
-botsort.yaml
+*.yaml
 __pycache__
 *.txt
 .vscode
