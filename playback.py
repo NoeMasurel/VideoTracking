@@ -43,11 +43,6 @@ LABEL_FONT_SCALE = 0.65
 LABEL_THICKNESS  = 2
 LABEL_PADDING    = 6
 
-
-# ---------------------------------------------------------------------------
-# Data structures
-# ---------------------------------------------------------------------------
-
 @dataclass
 class Detection:
     frame: int
@@ -62,11 +57,6 @@ class Detection:
         """Convert (x, y, w, h) → (x1, y1, x2, y2)."""
         x, y, w, h = self.bbox
         return int(x), int(y), int(x + w), int(y + h)
-
-
-# ---------------------------------------------------------------------------
-# I/O helpers
-# ---------------------------------------------------------------------------
 
 def load_detections(csv_path: Path) -> list[Detection]:
     """
@@ -93,7 +83,6 @@ def load_detections(csv_path: Path) -> list[Detection]:
     detections.sort(key=lambda d: d.frame)
     return detections
 
-
 def build_frame_index(detections: list[Detection]) -> dict[int, list[Detection]]:
     """Group detections by frame into a plain dict for safe .get() access."""
     index: dict[int, list[Detection]] = defaultdict(list)
@@ -101,14 +90,8 @@ def build_frame_index(detections: list[Detection]) -> dict[int, list[Detection]]
         index[det.frame].append(det)
     return dict(index)
 
-
-# ---------------------------------------------------------------------------
-# Rendering helpers
-# ---------------------------------------------------------------------------
-
 def _track_color(track_id: int) -> tuple[int, int, int]:
     return PALETTE[track_id % len(PALETTE)]
-
 
 def draw_bbox(frame: np.ndarray, det: Detection) -> None:
     x1, y1, x2, y2 = det.xyxy
@@ -128,7 +111,6 @@ def draw_bbox(frame: np.ndarray, det: Detection) -> None:
         (x1 + LABEL_PADDING, bg_y2 - LABEL_PADDING // 2 - baseline // 2 + th // 2),
         LABEL_FONT, LABEL_FONT_SCALE, (0, 0, 0), LABEL_THICKNESS, cv2.LINE_AA,
     )
-
 
 def draw_hud(
     frame: np.ndarray,
@@ -157,11 +139,6 @@ def draw_hud(
             frame, line, (HUD_X + 8, y),
             LABEL_FONT, 0.65, (0, 255, 200), 1, cv2.LINE_AA,
         )
-
-
-# ---------------------------------------------------------------------------
-# Player
-# ---------------------------------------------------------------------------
 
 class VideoPlayer:
     """Encapsulates video playback, seeking, rendering, and key-event handling."""
