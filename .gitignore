@@ -6,3 +6,6 @@ __pycache__
 *.txt
 .vscode
 /data
+models
+trackers
+.pytest_cache
