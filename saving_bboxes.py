@@ -362,10 +362,12 @@ class ObjectTracking:
 
         print()  # newline after \r progress
 
-        # Summary
-        print("\nFinal class counts:")
-        for class_name, count in sorted(self.class_counts.items()):
-            print(f"  {class_name}: {count}")
+        if len(self.class_counts):
+            print("\nFinal class counts:")
+            for class_name, count in sorted(self.class_counts.items()):
+                print(f"  {class_name}: {count}")
+        else : 
+            print("\nNo detections made")
 
         # Save MOT file 
         mot_rows.sort(key=lambda r: (r[0], r[1]))
