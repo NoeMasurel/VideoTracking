@@ -425,7 +425,7 @@ def main(argv: list[str] | None = None) -> None:
         display    = not args.no_display,
         save_video = args.save_video,
     )
-    tracker.run(output_mot=args.output_mot)
+    tracker.run(output_mot=args.output)
 
 
 if __name__ == "__main__":
