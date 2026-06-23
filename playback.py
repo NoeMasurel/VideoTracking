@@ -1,185 +1,307 @@
 """
-playback.py — Replay a video with bounding boxes from detections.json
+playback.py — Replay a video with bounding boxes from detections CSV.
 
 Usage
-    python playback.py # detections.json + source path stored inside
-    python playback.py --json detections.json # explicit JSON path
-    python playback.py --json detections.json --video path/to/video.mp4 # override video path
-    python playback.py --json detections.json --speed 2.0 # 2x playback speed
+    python playback.py -v path/to/video.mp4
+    python playback.py -v path/to/video.mp4 -c detections.txt
+    python playback.py -v path/to/video.mp4 -c detections.txt --speed 2.0
 
 Controls
-    q / ESC   → quit
-    SPACE     → pause / resume
-    d         → step forward one frame (while paused)
+    q / ESC : quit
+    SPACE   : pause / resume
+    d       : step forward one frame (while paused)
+    s       : step backward one frame (while paused)
 """
-import cv2
-import json
+
+from __future__ import annotations
+
 import argparse
+import csv
+import sys
+from collections import defaultdict
+from dataclasses import dataclass
 from pathlib import Path
 
-_PALETTE = [
+import cv2
+import numpy as np
+
+PALETTE = [
     (0, 255, 200), (255, 100,   0), (  0, 100, 255), (200, 255,   0),
     (255,   0, 200), (  0, 200, 255), (255, 200,   0), (100,   0, 255),
     (  0, 255, 100), (255,  50,  50),
 ]
 
-def _color(track_id: int):
-    return _PALETTE[track_id % len(_PALETTE)]
+HUD_X           = 8
+HUD_Y           = 8
+HUD_WIDTH       = 230
+HUD_LINE_HEIGHT = 28
+HUD_PADDING     = 8
+HUD_ALPHA       = 0.55
 
-def draw_bbox(frame, box, track_id, class_name, conf):
-    x1, y1, x2, y2 = map(int, box)
-    color = _color(track_id)
+LABEL_FONT       = cv2.FONT_HERSHEY_SIMPLEX
+LABEL_FONT_SCALE = 0.65
+LABEL_THICKNESS  = 2
+LABEL_PADDING    = 6
+
+
+# ---------------------------------------------------------------------------
+# Data structures
+# ---------------------------------------------------------------------------
+
+@dataclass
+class Detection:
+    frame: int
+    id: int
+    # Stored as (x, y, w, h) — top-left origin, pixel coordinates
+    bbox: list[float]
+    conf: float
+    cls: str = "person"
+
+    @property
+    def xyxy(self) -> tuple[int, int, int, int]:
+        """Convert (x, y, w, h) → (x1, y1, x2, y2)."""
+        x, y, w, h = self.bbox
+        return int(x), int(y), int(x + w), int(y + h)
+
+
+# ---------------------------------------------------------------------------
+# I/O helpers
+# ---------------------------------------------------------------------------
+
+def load_detections(csv_path: Path) -> list[Detection]:
+    """
+    Read a MOT-style CSV: <frame>,<id>,<bb_left>,<bb_top>,<bb_width>,<bb_height>,<conf>,…
+    Returns detections sorted by frame number.
+    """
+    detections: list[Detection] = []
+    with open(csv_path, newline="") as fh:
+        for row in csv.reader(fh):
+            if not row or row[0].startswith("#"):
+                continue
+            try:
+                det = Detection(
+                    frame=int(row[0]),
+                    id=int(row[1]),
+                    bbox=[float(row[i]) for i in range(2, 6)],
+                    conf=float(row[6]),
+                    cls="person",
+                )
+                detections.append(det)
+            except (IndexError, ValueError) as exc:
+                print(f"[WARN] Skipping malformed row {row}: {exc}", file=sys.stderr)
+
+    detections.sort(key=lambda d: d.frame)
+    return detections
+
+
+def build_frame_index(detections: list[Detection]) -> dict[int, list[Detection]]:
+    """Group detections by frame into a plain dict for safe .get() access."""
+    index: dict[int, list[Detection]] = defaultdict(list)
+    for det in detections:
+        index[det.frame].append(det)
+    return dict(index)
+
+
+# ---------------------------------------------------------------------------
+# Rendering helpers
+# ---------------------------------------------------------------------------
+
+def _track_color(track_id: int) -> tuple[int, int, int]:
+    return PALETTE[track_id % len(PALETTE)]
+
+
+def draw_bbox(frame: np.ndarray, det: Detection) -> None:
+    x1, y1, x2, y2 = det.xyxy
+    color = _track_color(det.id)
 
     cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
 
-    label = f"{class_name}:{track_id} {conf:.2f}"
-    font       = cv2.FONT_HERSHEY_SIMPLEX
-    font_scale = 0.65
-    thickness  = 2
-    padding    = 6
-
-    (tw, th), baseline = cv2.getTextSize(label, font, font_scale, thickness)
-    bg_y1 = max(y1 - th - 2 * padding, 0)
+    label = f"{det.cls}:{det.id} {det.conf:.2f}"
+    (tw, th), baseline = cv2.getTextSize(label, LABEL_FONT, LABEL_FONT_SCALE, LABEL_THICKNESS)
+    bg_y1 = max(y1 - th - 2 * LABEL_PADDING, 0)
     bg_y2 = y1
-    bg_x2 = x1 + tw + 2 * padding
+    bg_x2 = x1 + tw + 2 * LABEL_PADDING
 
     cv2.rectangle(frame, (x1, bg_y1), (bg_x2, bg_y2), color, -1)
     cv2.putText(
         frame, label,
-        (x1 + padding, bg_y2 - padding // 2 - baseline // 2 + th // 2),
-        font, font_scale, (0, 0, 0), thickness, cv2.LINE_AA,
+        (x1 + LABEL_PADDING, bg_y2 - LABEL_PADDING // 2 - baseline // 2 + th // 2),
+        LABEL_FONT, LABEL_FONT_SCALE, (0, 0, 0), LABEL_THICKNESS, cv2.LINE_AA,
     )
 
 
-def draw_hud(frame, frame_idx, total_frames, paused, class_counts):
-    """Top-left semi-transparent overlay with counts + playback info."""
+def draw_hud(
+    frame: np.ndarray,
+    frame_idx: int,
+    total_frames: int,
+    paused: bool,
+    class_counts: dict[str, int],
+) -> None:
+    """Top-left semi-transparent overlay with counts and playback info."""
     lines = [f"Frame {frame_idx}/{total_frames}  {'[PAUSED]' if paused else ''}"]
     lines += [f"  {name}: {cnt}" for name, cnt in sorted(class_counts.items())]
 
-    line_h  = 28
-    padding = 8
-    width   = 230
-    height  = padding + len(lines) * line_h + padding
-
+    height = HUD_PADDING + len(lines) * HUD_LINE_HEIGHT + HUD_PADDING
     overlay = frame.copy()
-    cv2.rectangle(overlay, (8, 8), (8 + width, 8 + height), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.55, frame, 0.45, 0, frame)
+    cv2.rectangle(
+        overlay,
+        (HUD_X, HUD_Y),
+        (HUD_X + HUD_WIDTH, HUD_Y + height),
+        (0, 0, 0), -1,
+    )
+    cv2.addWeighted(overlay, HUD_ALPHA, frame, 1 - HUD_ALPHA, 0, frame)
 
     for i, line in enumerate(lines):
-        y = 8 + padding + i * line_h + line_h // 2 + 6
-        cv2.putText(frame, line, (16, y),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 200), 1, cv2.LINE_AA)
+        y = HUD_Y + HUD_PADDING + i * HUD_LINE_HEIGHT + HUD_LINE_HEIGHT // 2 + 6
+        cv2.putText(
+            frame, line, (HUD_X + 8, y),
+            LABEL_FONT, 0.65, (0, 255, 200), 1, cv2.LINE_AA,
+        )
 
-def main():
-    ap = argparse.ArgumentParser(description="Replay video with saved bounding boxes.")
-    ap.add_argument("-j", "--json",  default="data/detections.json", help="Path to detections JSON")
-    ap.add_argument("-v","--video", default=None, help="Override source video path")
-    ap.add_argument("-s", "--speed", default = 1, help="Playback speed")
-    args = ap.parse_args()
 
-    # Load JSON
-    json_path = Path(args.json)
-    if not json_path.exists():
-        raise FileNotFoundError(f"JSON not found: {json_path}")
+# ---------------------------------------------------------------------------
+# Player
+# ---------------------------------------------------------------------------
 
-    with open(json_path) as f:
-        data = json.load(f)
+class VideoPlayer:
+    """Encapsulates video playback, seeking, rendering, and key-event handling."""
 
-    # Support both the new format (with "meta") and the old flat format
-    if "meta" in data:
-        meta        = data["meta"]
-        detections  = data["detections"]
-        source_path = args.video or meta["source"]
-        fps         = meta["fps"]
-        start_frame = meta["start_frame"]
-        end_frame   = meta["end_frame"]
-        class_names = {int(k): v for k, v in meta["class_names"].items()}
-    else:
-        # dict : {frame_str: [detection, ...]}
-        detections  = data
-        source_path = args.video
-        if source_path is None:
-            raise ValueError(
-                "JSON has no 'meta' block. Pass --video path/to/video.mp4"
-            )
-        fps         = None
-        start_frame = 0
-        end_frame   = None
-        class_names = {}  
+    def __init__(
+        self,
+        cap: cv2.VideoCapture,
+        frame_index: dict[int, list[Detection]],
+        start_frame: int,
+        end_frame: int,
+        speed: float = 1.0,
+    ):
+        self.cap         = cap
+        self.frame_index = frame_index
+        self.start_frame = start_frame
+        self.end_frame   = end_frame
+        self.fps         = cap.get(cv2.CAP_PROP_FPS) or 30.0
+        self.speed       = speed
 
-    if source_path is None:
-        raise ValueError("No video path. Use --video path/to/video.mp4")
+        self.paused        = False
+        self.current_frame = start_frame
+        self.seen_ids: set[int]        = set()
+        self.class_counts: dict[str, int] = {}
 
-    # Open video
-    cap = cv2.VideoCapture(source_path)
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
+    def _render(self, frame: np.ndarray) -> None:
+        """Draw detections and HUD onto `frame` in-place."""
+        current_detections = self.frame_index.get(self.current_frame, [])
+        for det in current_detections:
+            draw_bbox(frame, det)
+            if det.id not in self.seen_ids:
+                self.seen_ids.add(det.id)
+                self.class_counts[det.cls] = self.class_counts.get(det.cls, 0) + 1
+
+        draw_hud(
+            frame,
+            self.current_frame - self.start_frame,
+            self.end_frame - self.start_frame,
+            self.paused,
+            self.class_counts,
+        )
+
+    def _seek(self, target: int) -> np.ndarray | None:
+        """Seek to `target` frame index; returns the decoded frame or None."""
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, target)
+        ret, frame = self.cap.read()
+        if ret:
+            self.current_frame = target
+        return frame if ret else None
+
+    def run(self) -> None:
+        print(f"Frames {self.start_frame}–{self.end_frame}  |  "
+              f"{self.fps:.1f} FPS  |  speed ×{self.speed}")
+        print("Controls: SPACE=pause  d/s=step  q/ESC=quit")
+
+        frame: np.ndarray|None = None
+
+        while self.cap.isOpened() and self.current_frame <= self.end_frame:
+            delay_ms = max(1, int(1000 / (self.fps * self.speed)))
+
+            if not self.paused:
+                ret, frame = self.cap.read()
+                if not ret:
+                    break
+                self.current_frame += 1
+
+            if frame is not None:
+                self._render(frame)
+                cv2.imshow("Playback", frame)
+
+            key = cv2.waitKey(1 if self.paused else delay_ms) & 0xFF
+
+            if key in (ord("q"), 27):
+                break
+
+            elif key == ord(" "):
+                self.paused = not self.paused
+
+            elif key == ord("d") and self.paused:
+                target = self.current_frame + 1
+                if target <= self.end_frame:
+                    frame = self._seek(target)
+
+            elif key == ord("s") and self.paused:
+                target = self.current_frame - 1
+                if target >= self.start_frame:
+                    frame = self._seek(target)
+
+        self.cap.release()
+        cv2.destroyAllWindows()
+        print("Playback finished.")
+
+
+
+def parse_args() -> argparse.Namespace:
+    ap = argparse.ArgumentParser(
+        description="Replay video with saved MOT bounding boxes.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    ap.add_argument("-c", "--csv",   default="data/detections.txt",
+                    help="Path to detections CSV (MOT format)")
+    ap.add_argument("-v", "--video", required=True,
+                    help="Source video path")
+    ap.add_argument("-s", "--speed", type=float, default=1.0,
+                    help="Playback speed multiplier")
+    return ap.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+
+    csv_path = Path(args.csv)
+    if not csv_path.exists():
+        sys.exit(f"[ERROR] CSV not found: {csv_path}")
+
+    vid_path = Path(args.video)
+    if not vid_path.exists():
+        sys.exit(f"[ERROR] Video not found: {vid_path}")
+
+    detections = load_detections(csv_path)
+    if not detections:
+        sys.exit("[ERROR] No valid detections found in CSV.")
+
+    frame_index = build_frame_index(detections)
+    start_frame = detections[0].frame
+    end_frame   = detections[-1].frame
+
+    cap = cv2.VideoCapture(str(vid_path))
     if not cap.isOpened():
-        raise ValueError(f"Cannot open video: {source_path}")
+        sys.exit(f"[ERROR] Cannot open video: {vid_path}")
 
-    if fps is None:
-        fps = cap.get(cv2.CAP_PROP_FPS) or 30
-    if end_frame is None:
-        end_frame = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    total_analyzed = end_frame - start_frame
-    delay_ms = max(1, int(1000 / (fps * args.speed)))
-
-    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
-
-    seen_ids     = set()
-    class_counts = {}
-
-    print(f"Playing back {source_path}")
-    print(f"Frames {start_frame} to {end_frame}  |  {fps:.1f} FPS  |  speed × {args.speed}")
-    print("Controls: SPACE=pause  d=step  q/ESC=quit")
-
-    paused = False
-    current_frame = start_frame
-
-    while cap.isOpened() and current_frame < end_frame:
-        if not paused:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            current_frame += 1
-
-        # Draw detections for this frame (key : int or str)
-        frame_key = str(current_frame)
-        frame_dets = detections.get(frame_key, detections.get(current_frame, []))
-
-        for det in frame_dets:
-            track_id   = det.get("id", 0) or 0
-            cls        = det.get("cls", 0)
-            conf       = det.get("conf", 0.0)
-            bbox       = det.get("bbox", [0, 0, 0, 0])
-            class_name = class_names.get(cls, str(cls))
-
-            # Update counts
-            uid = (int(track_id), int(cls))
-            if uid not in seen_ids:
-                seen_ids.add(uid)
-                class_counts[class_name] = class_counts.get(class_name, 0) + 1
-
-            draw_bbox(frame, bbox, int(track_id), class_name, conf) # type: ignore
-
-        draw_hud(frame, current_frame - start_frame, total_analyzed, paused, class_counts) # type: ignore
-
-        cv2.imshow("Playback", frame) # type: ignore
-
-        key = cv2.waitKey(1 if paused else delay_ms) & 0xFF
-        if key in (ord("q"), 27):          # q or ESC
-            break
-        elif key == ord(" "):              # SPACE : pause vid
-            paused = not paused
-        elif key == ord("d") and paused:   # d → step one frame while paused
-            ret, frame = cap.read()
-            if not ret:
-                break
-            current_frame += 1
-            paused = True
-
-    cap.release()
-    cv2.destroyAllWindows()
-    print("Playback finished.")
+    player = VideoPlayer(
+        cap=cap,
+        frame_index=frame_index,
+        start_frame=start_frame,
+        end_frame=end_frame,
+        speed=args.speed,
+    )
+    player.run()
 
 
 if __name__ == "__main__":
