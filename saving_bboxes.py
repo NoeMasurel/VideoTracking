@@ -1,6 +1,9 @@
 """
 object_tracking.py — YOLO-based object tracking with optional display.
 
+Output is written in the MOT (Multiple Object Tracking) challenge format:
+    <frame>,<id>,<bb_left>,<bb_top>,<bb_width>,<bb_height>,<conf>,<x>,<y>,<z>
+
 Usage examples:
   # Basic run (with GUI window)
   python object_tracking.py videos/clip.mp4
@@ -12,16 +15,17 @@ Usage examples:
   python object_tracking.py videos/clip.mp4 --start 10 --end 60 \
       --conf 0.4 --save-video output/annotated.mp4
 
-  # Custom model and tracker
+  # Custom model and tracker, custom MOT output path
   python object_tracking.py videos/clip.mp4 \
-      --model yolo26n.pt --tracker deepocsort.yaml
+      --model yolo26n.pt --tracker deepocsort.yaml \
+      --output-mot data/my_results.txt
 
   # Full option reference
   python object_tracking.py --help
 """
 
 import argparse
-import json
+import csv
 from collections import defaultdict
 from pathlib import Path
 
@@ -30,10 +34,6 @@ import yaml
 from ultralytics import YOLO
 from ultralytics.utils.plotting import colors
 
-
-# ---------------------------------------------------------------------------
-# Helper: load tracker YAML and return its contents (or empty dict on failure)
-# ---------------------------------------------------------------------------
 
 def _load_tracker_params(tracker_path: str | None) -> dict:
     """
@@ -59,9 +59,6 @@ def _load_tracker_params(tracker_path: str | None) -> dict:
         return {"tracker": tracker_path, "parse_error": str(exc)}
 
 
-# ---------------------------------------------------------------------------
-# Helper: validate that all requested class names exist in the model
-# ---------------------------------------------------------------------------
 
 def _resolve_class_indices(names: dict, words: list[str]) -> list[int]:
     """Return class indices for the given label strings; raise on unknown labels."""
@@ -83,13 +80,7 @@ def _resolve_class_indices(names: dict, words: list[str]) -> list[int]:
     return indices
 
 
-# The only class this script tracks.
 TRACKED_CLASS = "person"
-
-
-# ---------------------------------------------------------------------------
-# Main class
-# ---------------------------------------------------------------------------
 
 class ObjectTracking:
     def __init__(
@@ -114,7 +105,7 @@ class ObjectTracking:
         duration    : clip length in seconds — mutually exclusive with `end`
         confidence  : detection confidence threshold (0–1)
         tracker     : tracking config .yaml file
-        display     : show a live OpenCV window (set False for SSH/headless)
+        display     : show a live OpenCV window (set False for SSH)
         save_video  : path to write an annotated output .mp4 (optional)
         """
         self.source        = source
@@ -125,12 +116,12 @@ class ObjectTracking:
         self.display       = display
         self.save_video    = save_video
 
-        # ── Load model ──────────────────────────────────────────────────────
+        # Load model
         self.model   = YOLO(model)
         self.names   = self.model.names          # {int: str}
         self.indices = _resolve_class_indices(self.names, [TRACKED_CLASS])
 
-        # ── Open video ──────────────────────────────────────────────────────
+        # Open video
         self.cap = cv2.VideoCapture(source)
         if not self.cap.isOpened():
             raise ValueError(f"Cannot open video file: {source!r}")
@@ -146,7 +137,7 @@ class ObjectTracking:
             f"Duration: {total_duration:.2f}s ({total_frames} frames)"
         )
 
-        # ── Resolve time window ──────────────────────────────────────────────
+        # Resolve time window
         if end is not None and duration is not None:
             raise ValueError("Provide either 'end' or 'duration', not both.")
 
@@ -177,13 +168,12 @@ class ObjectTracking:
 
         self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.start_frame)
 
-        # ── State ────────────────────────────────────────────────────────────
+        # State
         self.track_history  = defaultdict(list)
         self.class_counts   = defaultdict(int)
         self.seen_ids: set  = set()
-        self.all_detections: dict = {}
 
-        # ── Video writer (optional) ──────────────────────────────────────────
+        # Video writer (optional)
         self._writer: cv2.VideoWriter | None = None
         if save_video:
             Path(save_video).parent.mkdir(parents=True, exist_ok=True)
@@ -191,7 +181,7 @@ class ObjectTracking:
             self._writer = cv2.VideoWriter(save_video, fourcc, self.fps, (self.w, self.h))
             print(f"Output video: {save_video!r}")
 
-        # ── Drawing config ───────────────────────────────────────────────────
+        # Drawing config
         self.rect_width         = 2
         self.font_scale         = 1.0
         self.text_thickness     = 2
@@ -199,7 +189,7 @@ class ObjectTracking:
         self.label_margin       = 10
         self.polyline_thickness = 2
 
-    # ── Drawing helpers ──────────────────────────────────────────────────────
+    # Drawing
 
     def _draw_bbox(self, im0, box, track_id: int, cls: int, conf: float) -> None:
         x1, y1, x2, y2 = map(int, box)
@@ -252,13 +242,20 @@ class ObjectTracking:
             self.seen_ids.add(key)
             self.class_counts[self.names[cls]] += 1
 
-    # ── Main loop ────────────────────────────────────────────────────────────
+    # Main loop 
 
-    def run(self, output_json: str = "data/detections.json") -> dict:
-        """Run tracking and return the detections dict."""
-        Path(output_json).parent.mkdir(parents=True, exist_ok=True)
+    def run(self, output_mot: str = "data/detections.txt") -> list[tuple]:
+        """
+        Run tracking and return detections as a list of MOT rows.
 
-        # ── Print tracker config at start so it's visible in SSH output ──────
+        Each row is a tuple:
+            (frame, id, bb_left, bb_top, bb_width, bb_height, conf, -1, -1, -1)
+
+        The data is written to *output_mot* in CSV format (no header),
+        """
+        Path(output_mot).parent.mkdir(parents=True, exist_ok=True)
+
+        # Print tracker config at start so it's visible in SSH output
         print("\nTracker parameters:")
         for k, v in self.tracker_params.items():
             print(f"  {k}: {v}")
@@ -267,6 +264,9 @@ class ObjectTracking:
         total_to_process = self.end_frame - self.start_frame
         current_frame    = self.start_frame
         processed        = 0
+
+        # Accumulate all MOT rows; written to disk at the end.
+        mot_rows: list[tuple] = []
 
         try:
             while self.cap.isOpened() and current_frame < self.end_frame:
@@ -278,7 +278,7 @@ class ObjectTracking:
                 current_frame += 1
                 processed     += 1
 
-                # ── Inference ────────────────────────────────────────────────
+                # Inference
                 kwargs: dict = {
                     "persist": True,
                     "verbose": False,
@@ -294,29 +294,29 @@ class ObjectTracking:
                 if not results:
                     continue
 
-                result         = results[0]
+                result          = results[0]
                 annotated_frame = result.plot()
 
                 # Draw our own count overlay on top
                 self._draw_class_counts(annotated_frame)
 
-                # ── Optional display ─────────────────────────────────────────
+                # Optional display
                 if self.display:
                     cv2.imshow("YOLO Tracking", annotated_frame)
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         print("Quit key pressed — stopping early.")
                         break
 
-                # ── Optional video save ──────────────────────────────────────
+                # Optional video save 
                 if self._writer is not None:
                     self._writer.write(annotated_frame)
 
-                # ── Progress print (every 5 %) ───────────────────────────────
+                #Progress print (every 5 %)
                 pct = processed / total_to_process * 100
                 if processed == 1 or processed % max(1, total_to_process // 20) == 0:
                     print(f"  [{pct:5.1f}%] frame {current_frame}", end="\r", flush=True)
 
-                # ── Record detections ────────────────────────────────────────
+                # Record detections in MOT format
                 if result.boxes is None or result.boxes.id is None:
                     continue
 
@@ -325,20 +325,32 @@ class ObjectTracking:
                 clss  = result.boxes.cls.cpu().tolist() # type: ignore
                 confs = result.boxes.conf.cpu().tolist() # type: ignore
 
-                frame_data = []
                 for box, track_id, cls, conf in zip(boxes, ids, clss, confs):
                     tid = int(track_id)
                     cid = int(cls)
                     self._update_counts(tid, cid)
-                    frame_data.append({
-                        "id":   tid,
-                        "cls":  cid,
-                        "name": self.names[cid],
-                        "conf": round(conf, 4),
-                        "bbox": [round(x, 1) for x in box],
-                    })
 
-                self.all_detections[current_frame] = frame_data
+                    # Convert from xyxy to xywh (MOT uses top-left + width/height)
+                    x1, y1, x2, y2 = box
+                    bb_left   = round(x1, 1)
+                    bb_top    = round(y1, 1)
+                    bb_width  = round(x2 - x1, 1)
+                    bb_height = round(y2 - y1, 1)
+
+                    # MOT row: frame, id, left, top, width, height, conf, x, y, z
+                    # frame is 1-based per the MOT convention
+                    mot_rows.append((
+                        current_frame,      # 1-based frame index
+                        tid,                # track ID
+                        bb_left,
+                        bb_top,
+                        bb_width,
+                        bb_height,
+                        round(conf, 4),
+                        -1,                 # world x (unused for 2-D)
+                        -1,                 # world y (unused for 2-D)
+                        -1,                 # world z (unused for 2-D)
+                    ))
 
         finally:
             # Always release resources, even on exception
@@ -350,44 +362,28 @@ class ObjectTracking:
 
         print()  # newline after \r progress
 
-        # ── Summary ──────────────────────────────────────────────────────────
+        # Summary
         print("\nFinal class counts:")
         for class_name, count in sorted(self.class_counts.items()):
             print(f"  {class_name}: {count}")
 
-        # ── Save JSON ────────────────────────────────────────────────────────
-        output = {
-            "meta": {
-                "source":          self.source,
-                "model":           self.model_name,
-                "confidence":      self.confidence,
-                "tracker_params":  self.tracker_params,
-                "fps":             self.fps,
-                "width":           self.w,
-                "height":          self.h,
-                "start_frame":     self.start_frame,
-                "end_frame":       self.end_frame,
-                "class_names":     self.names,
-            },
-            "class_counts": dict(self.class_counts),
-            "detections":   self.all_detections,
-        }
+        # Save MOT file 
+        mot_rows.sort(key=lambda r: (r[0], r[1]))
 
-        with open(output_json, "w") as f:
-            json.dump(output, f, indent=2)
+        with open(output_mot, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerows(mot_rows)
 
-        print(f"Detections saved → {output_json}")
-        return self.all_detections
+        print(f"MOT detections saved → {output_mot}")
+        return mot_rows
 
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
 
 def build_parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(
-        prog="object_tracking.py",
-        description="YOLO object tracking with optional headless mode.",
+    p = argparse.ArgumentParser(prog="saving_bboxes.py",
+        description=(
+            "YOLO object tracking with optional headless mode. "
+            "MOT format saving "
+        ),
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
 
@@ -395,28 +391,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("source", help="Path to input video file.")
 
     # Model / tracker
-    p.add_argument("--model",   default="yolo26n.pt",  help="YOLO model weights (.pt).")
-    p.add_argument("--tracker", default=None,           help="Tracker config .yaml (e.g. deepocsort.yaml).")
-    p.add_argument("--conf",    type=float, default=None,
-                   help="Confidence threshold (0–1). Uses model default if omitted.")
+    p.add_argument("--model", default="models/yolo26n.pt", help="YOLO model weights (.pt).")
+    p.add_argument("--tracker", default=None, help="Tracker config .yaml (e.g. deepocsort.yaml).")
+    p.add_argument("--conf", type=float, default=None, help="Confidence threshold (0–1). Uses model default if omitted.")
 
     # Time window (mutually exclusive)
     time_group = p.add_mutually_exclusive_group()
-    time_group.add_argument("--end",      type=float, default=None,
-                            help="End time in seconds (exclusive with --duration).")
-    time_group.add_argument("--duration", type=float, default=None,
-                            help="Clip length in seconds from --start (exclusive with --end).")
+    time_group.add_argument("--end", type=float, default=None, help="End time in seconds (exclusive with --duration).")
+    time_group.add_argument("--duration", type=float, default=None, help="Clip length in seconds from --start (exclusive with --end).")
     p.add_argument("--start", type=float, default=None, help="Start time in seconds.")
 
-    # Output
-    p.add_argument("--output-json", default="data/detections.json",
-                   help="Path for the JSON detections file.")
-    p.add_argument("--save-video",  default=None,
-                   help="Save annotated video to this path (e.g. output/annotated.mp4).")
+    # Output 
+    p.add_argument("--output", default="data/detections.txt", help="Path for the MOT output file.",)
+    p.add_argument("--save-video", default=None, help="Save annotated video to this path (e.g. output/annotated.mp4).")
 
     # Display
-    p.add_argument("--no-display", action="store_true",
-                   help="Disable the OpenCV preview window (use this over SSH/headless).")
+    p.add_argument("--no-display", action="store_true", help="Disable the OpenCV preview window (use this over SSH/headless).")
 
     return p
 
@@ -435,7 +425,7 @@ def main(argv: list[str] | None = None) -> None:
         display    = not args.no_display,
         save_video = args.save_video,
     )
-    tracker.run(output_json=args.output_json)
+    tracker.run(output_mot=args.output_mot)
 
 
 if __name__ == "__main__":
