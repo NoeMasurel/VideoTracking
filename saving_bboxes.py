@@ -28,11 +28,11 @@ import argparse
 import csv
 from collections import defaultdict
 from pathlib import Path
-
 import cv2
 import yaml
 from ultralytics import YOLO
 from ultralytics.utils.plotting import colors
+import pandas as pd
 
 
 def _load_tracker_params(tracker_path: str | None) -> dict:
@@ -58,8 +58,6 @@ def _load_tracker_params(tracker_path: str | None) -> dict:
     except Exception as exc:
         return {"tracker": tracker_path, "parse_error": str(exc)}
 
-
-
 def _resolve_class_indices(names: dict, words: list[str]) -> list[int]:
     """Return class indices for the given label strings; raise on unknown labels."""
     inv = {v.lower(): k for k, v in names.items()}
@@ -79,7 +77,6 @@ def _resolve_class_indices(names: dict, words: list[str]) -> list[int]:
         )
     return indices
 
-
 TRACKED_CLASS = "person"
 
 class ObjectTracking:
@@ -94,6 +91,7 @@ class ObjectTracking:
         tracker: str | None = None,
         display: bool = True,
         save_video: str | None = None,
+        gt: str | None = None,
     ):
         """
         Parameters
@@ -107,6 +105,7 @@ class ObjectTracking:
         tracker     : tracking config .yaml file
         display     : show a live OpenCV window (set False for SSH)
         save_video  : path to write an annotated output .mp4 (optional)
+        gt          : path to a gt file to set the start and end frame (optional)
         """
         self.source        = source
         self.model_name    = model
@@ -136,37 +135,43 @@ class ObjectTracking:
             f"Video: {self.w}×{self.h} @ {self.fps:.2f} FPS | "
             f"Duration: {total_duration:.2f}s ({total_frames} frames)"
         )
-
         # Resolve time window
-        if end is not None and duration is not None:
-            raise ValueError("Provide either 'end' or 'duration', not both.")
+        if gt is not None :
+            if not Path(gt).exists():
+                raise FileNotFoundError(f"File not found: {gt}")
+            df = pd.read_csv(gt, header=None)
+            self.start_frame = int(df.iloc[0, 0]) # type: ignore
+            self.end_frame = int(df.iloc[-1, 0]) # type: ignore
+        else :
+            if end is not None and duration is not None:
+                raise ValueError("Provide either 'end' or 'duration', not both.")
 
-        self.start_sec = float(start) if start is not None else 0.0
+            self.start_sec = float(start) if start is not None else 0.0
 
-        if end is not None:
-            self.end_sec = float(end)
-        elif duration is not None:
-            self.end_sec = self.start_sec + float(duration)
-        else:
-            self.end_sec = total_duration
+            if end is not None:
+                self.end_sec = float(end)
+            elif duration is not None:
+                self.end_sec = self.start_sec + float(duration)
+            else:
+                self.end_sec = total_duration
 
-        self.start_sec = max(0.0, self.start_sec)
-        self.end_sec   = min(total_duration, self.end_sec)
+            self.start_sec = max(0.0, self.start_sec)
+            self.end_sec   = min(total_duration, self.end_sec)
 
-        if self.start_sec >= self.end_sec:
-            raise ValueError(
-                f"Invalid time window: [{self.start_sec:.2f}s, {self.end_sec:.2f}s]"
+            if self.start_sec >= self.end_sec:
+                raise ValueError(
+                    f"Invalid time window: [{self.start_sec:.2f}s, {self.end_sec:.2f}s]"
+                )
+
+            self.start_frame = int(self.start_sec * self.fps)
+            self.end_frame   = int(self.end_sec   * self.fps)
+
+            print(
+                f"Processing: {self.start_sec:.2f}s → {self.end_sec:.2f}s "
+                f"(frames {self.start_frame}–{self.end_frame})"
             )
 
-        self.start_frame = int(self.start_sec * self.fps)
-        self.end_frame   = int(self.end_sec   * self.fps)
-
-        print(
-            f"Processing: {self.start_sec:.2f}s → {self.end_sec:.2f}s "
-            f"(frames {self.start_frame}–{self.end_frame})"
-        )
-
-        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.start_frame)
+            self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.start_frame)
 
         # State
         self.track_history  = defaultdict(list)
@@ -403,6 +408,8 @@ def build_parser() -> argparse.ArgumentParser:
     time_group.add_argument("--duration", type=float, default=None, help="Clip length in seconds from --start (exclusive with --end).")
     p.add_argument("--start", type=float, default=None, help="Start time in seconds.")
 
+    p.add_argument("--gt", type=str, default=None, help="Filepath to csv ground truth in MOT format")
+
     # Output 
     p.add_argument("--output", default="data/detections.txt", help="Path for the MOT output file.",)
     p.add_argument("--save-video", default=None, help="Save annotated video to this path (e.g. output/annotated.mp4).")
@@ -426,6 +433,7 @@ def main(argv: list[str] | None = None) -> None:
         tracker    = args.tracker,
         display    = not args.no_display,
         save_video = args.save_video,
+        gt         = args.gt
     )
     tracker.run(output_mot=args.output)
 
