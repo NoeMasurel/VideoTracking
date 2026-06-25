@@ -142,6 +142,7 @@ class ObjectTracking:
             df = pd.read_csv(gt, header=None)
             self.start_frame = int(df.iloc[0, 0]) # type: ignore
             self.end_frame = int(df.iloc[-1, 0]) # type: ignore
+            print(f"Analyzing frames {self.start_frame} - {self.end_frame}")
         else :
             if end is not None and duration is not None:
                 raise ValueError("Provide either 'end' or 'duration', not both.")
@@ -171,7 +172,7 @@ class ObjectTracking:
                 f"(frames {self.start_frame}–{self.end_frame})"
             )
 
-            self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.start_frame)
+        self.cap.set(cv2.CAP_PROP_POS_FRAMES, self.start_frame)
 
         # State
         self.track_history  = defaultdict(list)
